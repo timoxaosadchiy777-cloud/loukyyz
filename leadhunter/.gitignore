@@ -1,0 +1,23 @@
+# Секреты и окружение
+.env
+# ...но пример конфигурации коммитим (перебивает `.env*` из корневого .gitignore)
+!.env.example
+
+# Telethon session
+*.session
+*.session-journal
+
+# База данных
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
