@@ -8,12 +8,29 @@ from __future__ import annotations
 
 import logging
 
-from anthropic import APIError, AsyncAnthropic
+from anthropic import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AsyncAnthropic,
+    InternalServerError,
+    RateLimitError,
+)
 
 from config import Settings
 from core.models import Order
+from core.retry import retry_async
 
 log = logging.getLogger(__name__)
+
+# Временные сбои, которые имеет смысл ретраить (429, 5xx, сеть/таймаут).
+# Ошибки вроде 400/401/403 сюда НЕ входят — их ретраить бессмысленно.
+_RETRYABLE = (
+    RateLimitError,
+    InternalServerError,
+    APIConnectionError,
+    APITimeoutError,
+)
 
 SYSTEM_PROMPT = """\
 Ты — senior-специалист, который откликается на фриланс-заказы. По тексту ТЗ \
@@ -36,11 +53,19 @@ class Responder:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        # max_retries=0: ретраями управляем сами (core.retry) — единый бэкофф и логи.
         # Пустой api_key => SDK возьмёт ANTHROPIC_API_KEY / профиль из окружения.
-        self._client = AsyncAnthropic(api_key=settings.anthropic_api_key or None)
+        self._client = AsyncAnthropic(
+            api_key=settings.anthropic_api_key or None,
+            max_retries=0,
+        )
 
     async def generate(self, order: Order) -> str | None:
-        """Возвращает текст отклика или ``None`` при ошибке/отказе."""
+        """Возвращает текст отклика или ``None`` при ошибке/отказе.
+
+        Временные сбои (429/5xx/сеть) ретраятся с экспоненциальной задержкой;
+        постоянные (400/401/…) обрываются сразу.
+        """
         if not self._settings.anthropic_ready:
             log.warning("ANTHROPIC_API_KEY не задан — отклик не сгенерирован")
             return None
@@ -62,8 +87,17 @@ class Responder:
             request["thinking"] = {"type": "adaptive"}
 
         try:
-            response = await self._client.messages.create(**request)
-        except APIError as exc:
+            response = await retry_async(
+                lambda: self._client.messages.create(**request),
+                attempts=self._settings.retry_attempts,
+                base_delay=self._settings.retry_base_delay,
+                exceptions=_RETRYABLE,
+                label=f"claude:{order.dedup_key}",
+            )
+        except _RETRYABLE as exc:
+            log.error("Claude API недоступен после ретраев (%s): %s", order.dedup_key, exc)
+            return None
+        except APIError as exc:  # постоянные ошибки (400/401/403/…)
             log.error("Ошибка Claude API для %s: %s", order.dedup_key, exc)
             return None
 

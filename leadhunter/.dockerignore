@@ -1,0 +1,22 @@
+# Секреты и данные — не запекаем в образ (передаются через env_file и том)
+.env
+data/
+*.session
+*.session-journal
+*.db
+*.sqlite
+*.sqlite3
+
+# Python-артефакты
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Прочее
+.git/
+.gitignore
+README.md

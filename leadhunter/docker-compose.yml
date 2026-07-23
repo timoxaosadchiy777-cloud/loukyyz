@@ -1,0 +1,19 @@
+services:
+  leadhunter:
+    build: .
+    image: leadhunter:latest
+    container_name: leadhunter
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Сессию Telethon и базу держим на томе — переживают пересборку контейнера.
+      TG_SESSION: /app/data/leadhunter
+      DATABASE_PATH: /app/data/leadhunter.db
+    volumes:
+      - ./data:/app/data
+    # Нужно для первичной авторизации Telethon:
+    #   docker compose run --rm leadhunter   (ввести код из Telegram)
+    # затем обычный фон:
+    #   docker compose up -d
+    stdin_open: true
+    tty: true

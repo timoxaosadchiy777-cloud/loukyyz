@@ -14,6 +14,7 @@ import re
 
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
+from bot.alerts import Alerter
 from config import Settings
 from core.models import Order
 from parsers.base import BaseParser
@@ -38,8 +39,13 @@ class KworkParser(BaseParser):
 
     name = "kwork"
 
-    def __init__(self, queue: "asyncio.Queue[Order]", settings: Settings) -> None:
-        super().__init__(queue)
+    def __init__(
+        self,
+        queue: "asyncio.Queue[Order]",
+        settings: Settings,
+        alerter: Alerter | None = None,
+    ) -> None:
+        super().__init__(queue, alerter)
         self._settings = settings
 
     async def run(self) -> None:
@@ -64,8 +70,12 @@ class KworkParser(BaseParser):
                     try:
                         found = await self._scrape(page)
                         log.debug("Kwork: обработано карточек — %s", found)
-                    except Exception:
+                    except Exception as exc:
                         log.exception("Kwork: ошибка при разборе страницы")
+                        await self.alert(
+                            f"Kwork: ошибка при разборе страницы: {exc}",
+                            key="kwork-scrape-fail",
+                        )
                     await asyncio.sleep(s.kwork_poll_interval)
             finally:
                 await context.close()

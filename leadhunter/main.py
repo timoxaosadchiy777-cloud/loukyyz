@@ -13,6 +13,7 @@ import asyncio
 import logging
 
 from ai.responder import Responder
+from bot.alerts import Alerter
 from bot.bot import create_bot, create_dispatcher, push_card
 from config import Settings, get_settings
 from core.filters import is_junk, parse_budget
@@ -31,6 +32,7 @@ async def handle_order(
     db: Database,
     responder: Responder,
     bot,
+    alerter: Alerter,
     settings: Settings,
 ) -> None:
     """Обрабатывает один заказ по всей цепочке."""
@@ -58,6 +60,11 @@ async def handle_order(
     response = await responder.generate(order)
     if not response:
         response = "(Не удалось сгенерировать отклик автоматически — сформулируй вручную по ТЗ.)"
+        # Систематические сбои ИИ подсвечиваем владельцу (с троттлингом).
+        await alerter.alert(
+            "Claude не смог сгенерировать отклик — карточки уходят без ИИ-текста. Проверь логи/ключ.",
+            key="ai-failure",
+        )
 
     # 4. Сохранение и доставка карточки владельцу.
     order_id = await db.save_order(order, response=response, status="new")
@@ -77,6 +84,7 @@ async def process_orders(
     db: Database,
     responder: Responder,
     bot,
+    alerter: Alerter,
     settings: Settings,
 ) -> None:
     """Бесконечный потребитель очереди заказов."""
@@ -84,7 +92,12 @@ async def process_orders(
         order = await queue.get()
         try:
             await handle_order(
-                order, db=db, responder=responder, bot=bot, settings=settings
+                order,
+                db=db,
+                responder=responder,
+                bot=bot,
+                alerter=alerter,
+                settings=settings,
             )
         except Exception:
             log.exception("Ошибка обработки заказа %s", order.dedup_key)
@@ -103,10 +116,11 @@ async def main() -> None:
     responder = Responder(settings)
     bot = create_bot(settings)
     dp = create_dispatcher(db, settings)
+    alerter = Alerter(bot, settings.owner_id, settings.alert_cooldown)
 
     queue: "asyncio.Queue[Order]" = asyncio.Queue()
-    telegram = TelegramParser(queue, settings)
-    kwork = KworkParser(queue, settings)
+    telegram = TelegramParser(queue, settings, alerter)
+    kwork = KworkParser(queue, settings, alerter)
 
     tasks = [
         asyncio.create_task(dp.start_polling(bot), name="bot"),
@@ -114,7 +128,12 @@ async def main() -> None:
         asyncio.create_task(kwork.run_safe(), name="kwork"),
         asyncio.create_task(
             process_orders(
-                queue, db=db, responder=responder, bot=bot, settings=settings
+                queue,
+                db=db,
+                responder=responder,
+                bot=bot,
+                alerter=alerter,
+                settings=settings,
             ),
             name="processor",
         ),

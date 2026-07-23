@@ -7,6 +7,7 @@ import logging
 
 from telethon import TelegramClient, events
 
+from bot.alerts import Alerter
 from config import Settings
 from core.models import Order
 from parsers.base import BaseParser
@@ -19,8 +20,13 @@ class TelegramParser(BaseParser):
 
     name = "telegram"
 
-    def __init__(self, queue: "asyncio.Queue[Order]", settings: Settings) -> None:
-        super().__init__(queue)
+    def __init__(
+        self,
+        queue: "asyncio.Queue[Order]",
+        settings: Settings,
+        alerter: Alerter | None = None,
+    ) -> None:
+        super().__init__(queue, alerter)
         self._settings = settings
         self._client = TelegramClient(
             settings.tg_session,

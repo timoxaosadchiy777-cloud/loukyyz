@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     anthropic_thinking: bool = Field(True, alias="ANTHROPIC_THINKING")
     anthropic_effort: EffortLevel = Field("medium", alias="ANTHROPIC_EFFORT")
 
+    # --- Устойчивость: ретраи и алёрты ---
+    retry_attempts: int = Field(3, alias="RETRY_ATTEMPTS")
+    retry_base_delay: float = Field(2.0, alias="RETRY_BASE_DELAY")
+    alert_cooldown: int = Field(300, alias="ALERT_COOLDOWN")
+
     # --- Kwork (Playwright-парсер) ---
     kwork_enabled: bool = Field(False, alias="KWORK_ENABLED")
     kwork_login: str = Field("", alias="KWORK_LOGIN")
