@@ -99,14 +99,24 @@ cp .env.example .env
 | `GEMINI_API_KEY` | ключ Google Gemini (бесплатный) | https://aistudio.google.com |
 | `KWORK_*` | биржа Kwork (опционально) | `KWORK_ENABLED=true` для включения |
 
-### 3. Старт
+### 3. Вход в Telegram (один раз)
+
+```bash
+python login.py
+```
+
+Скрипт попросит код подтверждения — он приходит **сообщением внутри приложения
+Telegram** (от аккаунта «Telegram»), **не по СМС**. Введите его — создастся файл
+сессии `*.session`. При ошибке скрипт покажет понятную причину (неверный
+`api_id`/`api_hash`, неверный номер и т.п.).
+
+### 4. Запуск бота
 
 ```bash
 python main.py
 ```
 
-При первом запуске Telethon запросит код подтверждения (и, при 2FA, пароль) —
-создастся файл сессии `*.session`. Дальше — вход автоматический.
+Вход уже сохранён в сессии — код больше не спросит.
 
 ---
 
@@ -118,9 +128,9 @@ python main.py
 cd leadhunter
 cp .env.example .env        # заполнить ключи
 
-# 1) Первичная авторизация Telethon (интерактивно — ввести код из Telegram).
+# 1) Первичная авторизация Telegram (ввести код из приложения Telegram).
 #    Сессия и база сохранятся в ./data и переживут пересборки.
-docker compose run --rm leadhunter
+docker compose run --rm leadhunter python login.py
 
 # 2) Обычный фоновый запуск:
 docker compose up -d --build

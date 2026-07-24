@@ -42,12 +42,25 @@ class TelegramParser(BaseParser):
         chats = self._settings.tg_chats or None  # None => все диалоги
         keywords = [k.lower() for k in self._settings.tg_keywords]
 
+        # Логин интерактивный (ввод кода) вынесен в отдельный `login.py`, чтобы
+        # не блокировать событийный цикл вводом с консоли. Здесь только проверяем,
+        # что сессия уже авторизована.
+        await self._client.connect()
+        if not await self._client.is_user_authorized():
+            log.error(
+                "Telegram: аккаунт не авторизован. Выполните один раз: python login.py"
+            )
+            await self.alert(
+                "Telegram: нет авторизации. Запустите `python login.py` и войдите по коду.",
+                key="tg-auth",
+            )
+            await self._client.disconnect()
+            return
+
         self._client.add_event_handler(
             self._make_handler(keywords),
             events.NewMessage(chats=chats),
         )
-
-        await self._client.start(phone=self._settings.tg_phone or None)
         log.info(
             "Telegram-парсер запущен (чатов: %s, ключевых слов: %s)",
             len(self._settings.tg_chats) or "все",
