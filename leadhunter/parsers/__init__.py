@@ -1,1 +1,1 @@
-"""Парсеры источников: Telethon (чаты) и Playwright (Kwork)."""
+"""Парсеры источников заказов (Playwright — Kwork)."""

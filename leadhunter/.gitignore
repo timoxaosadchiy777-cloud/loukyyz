@@ -3,11 +3,8 @@
 # ...но пример конфигурации коммитим (перебивает `.env*` из корневого .gitignore)
 !.env.example
 
-# Telethon session
-*.session
-*.session-journal
-
 # Сохранённая сессия браузера Kwork (содержит куки авторизации)
+storage_state.json
 kwork_state.json
 
 # База данных

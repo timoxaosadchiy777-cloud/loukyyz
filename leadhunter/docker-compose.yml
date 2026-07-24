@@ -6,14 +6,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # Сессию Telethon и базу держим на томе — переживают пересборку контейнера.
-      TG_SESSION: /app/data/leadhunter
+      # Базу и сессию браузера держим на томе — переживают пересборку контейнера.
       DATABASE_PATH: /app/data/leadhunter.db
+      KWORK_STORAGE_STATE: /app/data/storage_state.json
     volumes:
       - ./data:/app/data
-    # Нужно для первичной авторизации Telethon:
-    #   docker compose run --rm leadhunter   (ввести код из Telegram)
-    # затем обычный фон:
-    #   docker compose up -d
-    stdin_open: true
-    tty: true
+    # Вход в Kwork делается на хосте (python kwork_login.py) — положите
+    # получившийся storage_state.json в ./data перед запуском.

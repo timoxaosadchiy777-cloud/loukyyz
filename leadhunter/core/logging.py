@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 
-_NOISY_LOGGERS = ("telethon", "aiosqlite", "httpx", "httpcore", "hpack", "asyncio")
+_NOISY_LOGGERS = ("aiosqlite", "httpx", "httpcore", "hpack", "asyncio")
 
 
 def setup_logging(level: str = "INFO") -> None:

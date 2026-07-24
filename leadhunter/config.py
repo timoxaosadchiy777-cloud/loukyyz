@@ -27,15 +27,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # --- Telegram (Telethon userbot для мониторинга чатов) ---
-    tg_api_id: int = Field(0, alias="TG_API_ID")
-    tg_api_hash: str = Field("", alias="TG_API_HASH")
-    tg_session: str = Field("leadhunter", alias="TG_SESSION")
-    tg_phone: str = Field("", alias="TG_PHONE")
-    tg_chats: CsvList = Field(default_factory=list, alias="TG_CHATS")
-    tg_keywords: CsvList = Field(default_factory=list, alias="TG_KEYWORDS")
-
-    # --- Aiogram-бот (пуш карточек владельцу) ---
+    # --- Aiogram-бот (доставка карточек владельцу) ---
     bot_token: str = Field("", alias="BOT_TOKEN")
     owner_id: int = Field(0, alias="OWNER_ID")
 
@@ -51,12 +43,12 @@ class Settings(BaseSettings):
     alert_cooldown: int = Field(300, alias="ALERT_COOLDOWN")
 
     # --- Kwork (Playwright-парсер) ---
-    kwork_enabled: bool = Field(False, alias="KWORK_ENABLED")
+    kwork_enabled: bool = Field(True, alias="KWORK_ENABLED")
     kwork_url: str = Field("https://kwork.ru/projects", alias="KWORK_URL")
     kwork_poll_interval: int = Field(180, alias="KWORK_POLL_INTERVAL")
     kwork_headless: bool = Field(True, alias="KWORK_HEADLESS")
     # Файл сохранённой сессии браузера (создаётся скриптом kwork_login.py).
-    kwork_storage_state: str = Field("kwork_state.json", alias="KWORK_STORAGE_STATE")
+    kwork_storage_state: str = Field("storage_state.json", alias="KWORK_STORAGE_STATE")
 
     # --- Фильтрация мусора ---
     min_budget: int = Field(2000, alias="MIN_BUDGET")
@@ -76,17 +68,13 @@ class Settings(BaseSettings):
     database_path: str = Field("leadhunter.db", alias="DATABASE_PATH")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
-    @field_validator("tg_chats", "tg_keywords", "junk_phrases", mode="before")
+    @field_validator("junk_phrases", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
-        """Позволяет задавать списки одной строкой: `a, b, c`."""
+        """Позволяет задавать список одной строкой: `a, b, c`."""
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
-
-    @property
-    def telegram_ready(self) -> bool:
-        return bool(self.tg_api_id and self.tg_api_hash)
 
     @property
     def gemini_ready(self) -> bool:

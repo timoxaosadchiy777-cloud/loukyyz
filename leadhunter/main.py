@@ -1,10 +1,12 @@
 """LeadHunter — точка входа.
 
-Запускает асинхронно четыре компонента:
-  1. Telegram-парсер (Telethon) — мониторинг чатов.
-  2. Kwork-парсер (Playwright) — свежие заказы с биржи.
-  3. Пайплайн обработки — дедуп → фильтр → генерация отклика → пуш карточки.
-  4. Aiogram-бот — доставка карточек и инлайн-управление.
+Запускает асинхронно три компонента:
+  1. Kwork-парсер (Playwright) — свежие заказы с биржи.
+  2. Пайплайн обработки — дедуп → фильтр → генерация отклика → пуш карточки.
+  3. Aiogram-бот — доставка карточек и инлайн-управление.
+
+Запуск неинтерактивный: без ввода с консоли, без авторизации пользователя и
+без ожидания кода. Вход в Kwork выполняется отдельно один раз (kwork_login.py).
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ from core.logging import setup_logging
 from core.models import Order
 from database.db import Database
 from parsers.kwork_parser import KworkParser
-from parsers.telegram_parser import TelegramParser
 
 log = logging.getLogger("leadhunter")
 
@@ -119,12 +120,10 @@ async def main() -> None:
     alerter = Alerter(bot, settings.owner_id, settings.alert_cooldown)
 
     queue: "asyncio.Queue[Order]" = asyncio.Queue()
-    telegram = TelegramParser(queue, settings, alerter)
     kwork = KworkParser(queue, settings, alerter)
 
     tasks = [
         asyncio.create_task(dp.start_polling(bot), name="bot"),
-        asyncio.create_task(telegram.run_safe(), name="telegram"),
         asyncio.create_task(kwork.run_safe(), name="kwork"),
         asyncio.create_task(
             process_orders(

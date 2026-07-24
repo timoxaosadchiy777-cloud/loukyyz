@@ -1,9 +1,15 @@
 """Парсер свежих заказов Kwork через Playwright.
 
-⚠️  Kwork периодически меняет вёрстку и часто требует авторизацию для доступа
-к бирже проектов. CSS-селекторы вынесены в константы ниже — при поломке парсинга
-в первую очередь проверяйте и обновляйте именно их. Любая ошибка селектора не
-роняет процесс: она логируется, и парсер ждёт следующей итерации.
+Использует сохранённую браузерную сессию (storage_state), созданную скриптом
+`kwork_login.py` — пароли в проекте не хранятся.
+
+⚠️  Kwork периодически меняет вёрстку. CSS-селекторы вынесены в константы ниже —
+при поломке парсинга в первую очередь проверяйте и обновляйте именно их. Ни одна
+ошибка селектора не роняет процесс: она логируется, парсер ждёт следующей итерации.
+
+Дедупликация уже обработанных проектов выполняется ниже по конвейеру (main.py):
+каждый заказ проверяется в SQLite по (source, external_id) до генерации отклика,
+поэтому повторно один и тот же проект не обрабатывается.
 """
 
 from __future__ import annotations
@@ -98,20 +104,41 @@ class KworkParser(BaseParser):
 
     async def _scrape(self, page) -> int:
         await page.goto(self._settings.kwork_url, wait_until="domcontentloaded")
+
+        # Сессия истекла? Kwork перекидывает на страницу входа.
+        if _looks_logged_out(page):
+            log.warning("Kwork: сессия истекла — нужен повторный вход (kwork_login.py).")
+            await self.alert(
+                "Kwork: сессия истекла. Выполните заново: python kwork_login.py",
+                key="kwork-session-expired",
+            )
+            return 0
+
         try:
             await page.wait_for_selector(CARD_SELECTOR, timeout=15_000)
         except PWTimeout:
-            log.warning("Kwork: карточки заказов не найдены (селектор устарел?)")
+            log.warning(
+                "Kwork: карточки проектов не найдены на %s — либо нет новых проектов, "
+                "либо изменилась вёрстка (проверьте CARD_SELECTOR).",
+                self._settings.kwork_url,
+            )
             return 0
 
         cards = await page.query_selector_all(CARD_SELECTOR)
-        count = 0
+        emitted = 0
         for card in cards:
             order = await self._parse_card(card)
             if order is not None:
                 await self.emit(order)
-                count += 1
-        return count
+                emitted += 1
+
+        log.info(
+            "Kwork: на странице карточек — %s, отправлено в обработку — %s "
+            "(дубликаты отсеются дальше по конвейеру).",
+            len(cards),
+            emitted,
+        )
+        return emitted
 
     async def _parse_card(self, card) -> Order | None:
         try:
@@ -151,3 +178,9 @@ async def _safe_text(root, selector: str) -> str:
     if element is None:
         return ""
     return ((await element.inner_text()) or "").strip()
+
+
+def _looks_logged_out(page) -> bool:
+    """Эвристика: Kwork при истёкшей сессии редиректит на /login или /register."""
+    url = (page.url or "").lower()
+    return "/login" in url or "/register" in url
