@@ -19,6 +19,9 @@ from core.retry import retry_async
 
 log = logging.getLogger(__name__)
 
+# Дефолт, если GEMINI_MODEL не задана/пуста. Совпадает с дефолтом в config.py.
+_DEFAULT_MODEL = "gemini-1.5-flash"
+
 SYSTEM_PROMPT = """\
 Ты — senior-специалист, который откликается на фриланс-заказы. По тексту ТЗ \
 напиши короткий, жёсткий и профессиональный отклик-решение.
@@ -47,12 +50,17 @@ class Responder:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        # Модель берём из окружения (GEMINI_MODEL); если пусто — дефолт.
+        # Аналог os.getenv("GEMINI_MODEL", _DEFAULT_MODEL), но через единый конфиг.
+        self._model = settings.gemini_model or _DEFAULT_MODEL
         # Клиент создаём только при наличии ключа; иначе generate() тихо отдаёт None.
         self._client = (
             genai.Client(api_key=settings.gemini_api_key)
             if settings.gemini_ready
             else None
         )
+        if self._client is not None:
+            log.info("Gemini: используется модель %s", self._model)
 
     async def generate(self, order: Order) -> str | None:
         """Возвращает текст отклика или ``None`` при ошибке/отсутствии ключа.
@@ -77,7 +85,7 @@ class Responder:
         try:
             response = await retry_async(
                 lambda: self._client.aio.models.generate_content(
-                    model=self._settings.gemini_model,
+                    model=self._model,
                     contents=user_content,
                     config=config,
                 ),
@@ -88,7 +96,12 @@ class Responder:
                 label=f"gemini:{order.dedup_key}",
             )
         except genai_errors.APIError as exc:
-            log.error("Ошибка Gemini API для %s: %s", order.dedup_key, exc)
+            # Исчерпан лимит/квота (429 limit:0), недоступная модель, неверный ключ
+            # и т.п. — логируем и отдаём None: пайплайн продолжает работу.
+            log.error("Ошибка Gemini API для %s (модель %s): %s", order.dedup_key, self._model, exc)
+            return None
+        except Exception as exc:  # noqa: BLE001 — любой иной сбой не должен ронять пайплайн
+            log.error("Непредвиденная ошибка Gemini для %s: %s", order.dedup_key, exc)
             return None
 
         if not response.candidates:

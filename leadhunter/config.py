@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # --- Google Gemini (генерация откликов) ---
     gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
-    gemini_model: str = Field("gemini-2.5-flash", alias="GEMINI_MODEL")
+    gemini_model: str = Field("gemini-1.5-flash", alias="GEMINI_MODEL")
     gemini_max_tokens: int = Field(1024, alias="GEMINI_MAX_TOKENS")
     gemini_temperature: float = Field(0.7, alias="GEMINI_TEMPERATURE")
 

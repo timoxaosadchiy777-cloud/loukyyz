@@ -100,7 +100,7 @@ python main.py
 | `BOT_TOKEN` | токен бота-получателя | [@BotFather](https://t.me/BotFather) |
 | `OWNER_ID` | ваш Telegram id | [@userinfobot](https://t.me/userinfobot) |
 | `GEMINI_API_KEY` | ключ Google Gemini (бесплатный) | https://aistudio.google.com |
-| `GEMINI_MODEL` | модель Gemini | по умолчанию `gemini-2.5-flash` |
+| `GEMINI_MODEL` | модель Gemini | по умолчанию `gemini-1.5-flash` |
 | `KWORK_ENABLED` | включить парсинг Kwork | `true` |
 | `KWORK_URL` | страница биржи/категории | по умолчанию `https://kwork.ru/projects` |
 | `KWORK_POLL_INTERVAL` | период опроса, сек | по умолчанию `180` |
@@ -124,8 +124,8 @@ python main.py
 
 ## ⚙️ Тонкая настройка ИИ
 
-- `GEMINI_MODEL` — модель (по умолчанию `gemini-2.5-flash`; если недоступна —
-  `gemini-2.0-flash`).
+- `GEMINI_MODEL` — модель Gemini (по умолчанию `gemini-1.5-flash`; можно указать
+  любую доступную вашему ключу модель — меняется только в `.env`, без правок кода).
 - `GEMINI_MAX_TOKENS` / `GEMINI_TEMPERATURE` — длина и «разнообразие» отклика.
 
 Промпт настроен на короткий, жёсткий отклик без приветствий и клише
