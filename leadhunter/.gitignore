@@ -7,6 +7,9 @@
 *.session
 *.session-journal
 
+# Сохранённая сессия браузера Kwork (содержит куки авторизации)
+kwork_state.json
+
 # База данных
 *.db
 *.sqlite

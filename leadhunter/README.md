@@ -25,6 +25,8 @@ LeadHunter мониторит Telegram-чаты и биржу **Kwork**, отс�
 ```
 leadhunter/
 ├── main.py                  # точка входа, оркестрация через asyncio
+├── kwork_login.py           # разовый вход в Kwork (сохраняет сессию браузера)
+├── login.py                 # разовый вход в Telegram (опционально)
 ├── config.py                # настройки из .env (pydantic-settings)
 ├── requirements.txt
 ├── .env.example
@@ -92,31 +94,44 @@ cp .env.example .env
 
 | Переменная | Что это | Где взять |
 |---|---|---|
-| `TG_API_ID`, `TG_API_HASH` | доступ userbot к Telegram | https://my.telegram.org |
-| `TG_CHATS`, `TG_KEYWORDS` | чаты и ключевые слова | вручную |
 | `BOT_TOKEN` | токен бота-получателя | [@BotFather](https://t.me/BotFather) |
 | `OWNER_ID` | ваш Telegram id | [@userinfobot](https://t.me/userinfobot) или `/start` боту |
 | `GEMINI_API_KEY` | ключ Google Gemini (бесплатный) | https://aistudio.google.com |
-| `KWORK_*` | биржа Kwork (опционально) | `KWORK_ENABLED=true` для включения |
+| `KWORK_ENABLED` | включить парсинг Kwork | поставьте `true` |
+| `TG_API_ID`, `TG_API_HASH` | **опционально** — мониторинг Telegram-чатов | https://my.telegram.org (иначе оставьте пустым) |
 
-### 3. Вход в Telegram (один раз)
+> Работаете только с Kwork? Оставьте `TG_API_ID` пустым — парсер чатов сам выключится,
+> вход по коду (`login.py`) не понадобится.
+
+### 3. Вход в Kwork (один раз)
+
+```bash
+python kwork_login.py
+```
+
+Откроется браузер — войдите в свой аккаунт Kwork вручную (при необходимости
+решите капчу), вернитесь в консоль и нажмите Enter. Сессия сохранится в
+`kwork_state.json`, и бот будет заходить на Kwork уже залогиненным (пароль
+в проекте не хранится).
+
+### 4. (Опционально) вход в Telegram — только если включён мониторинг чатов
 
 ```bash
 python login.py
 ```
 
-Скрипт попросит код подтверждения — он приходит **сообщением внутри приложения
-Telegram** (от аккаунта «Telegram»), **не по СМС**. Введите его — создастся файл
-сессии `*.session`. При ошибке скрипт покажет понятную причину (неверный
-`api_id`/`api_hash`, неверный номер и т.п.).
+Код приходит **сообщением внутри приложения Telegram** (чат «Telegram»), **не по СМС**.
+Если не приходит — введите `sms`, чтобы получить его по СМС. Пропустите этот шаг,
+если работаете только с Kwork.
 
-### 4. Запуск бота
+### 5. Запуск бота
 
 ```bash
 python main.py
 ```
 
-Вход уже сохранён в сессии — код больше не спросит.
+Сессии уже сохранены — заново входить не нужно. Заказы с Kwork будут приходить
+карточками в ваш Telegram-бот с готовым откликом.
 
 ---
 
@@ -128,10 +143,6 @@ python main.py
 cd leadhunter
 cp .env.example .env        # заполнить ключи
 
-# 1) Первичная авторизация Telegram (ввести код из приложения Telegram).
-#    Сессия и база сохранятся в ./data и переживут пересборки.
-docker compose run --rm leadhunter python login.py
-
 # 2) Обычный фоновый запуск:
 docker compose up -d --build
 
@@ -140,9 +151,15 @@ docker compose logs -f
 docker compose down
 ```
 
-Сессия Telethon (`./data/leadhunter.session`) и база (`./data/leadhunter.db`)
-лежат на томе `./data`, поэтому не теряются при пересборке контейнера.
-`restart: unless-stopped` поднимает сервис после падения или перезагрузки хоста.
+> ⚠️ Вход в Kwork (`kwork_login.py`) открывает видимое окно браузера, а контейнер
+> без графики его показать не может. Поэтому выполните вход **на хосте** (обычным
+> `python kwork_login.py`), положите получившийся `kwork_state.json` рядом с
+> `docker-compose.yml`, и смонтируйте его в контейнер. Аналогично для Telegram —
+> выполните `python login.py` на хосте и положите `*.session` в `./data`.
+
+База (`./data/leadhunter.db`) лежит на томе `./data`, поэтому не теряется при
+пересборке. `restart: unless-stopped` поднимает сервис после падения или
+перезагрузки хоста.
 
 ---
 

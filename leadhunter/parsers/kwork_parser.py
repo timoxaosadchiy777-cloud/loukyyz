@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 
-from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
+from playwright.async_api import TimeoutError as PWTimeout, async_playwright
 
 from bot.alerts import Alerter
 from config import Settings
@@ -54,13 +55,27 @@ class KworkParser(BaseParser):
             log.info("Kwork-парсер выключен (KWORK_ENABLED=false)")
             return
 
+        # Логин делается один раз вручную скриптом kwork_login.py — здесь только
+        # переиспользуем сохранённую сессию браузера (cookie/localStorage).
+        if not os.path.exists(s.kwork_storage_state):
+            log.error(
+                "Kwork: нет сохранённой сессии («%s»). Выполните один раз: python kwork_login.py",
+                s.kwork_storage_state,
+            )
+            await self.alert(
+                "Kwork: не выполнен вход. Запустите `python kwork_login.py` и войдите в аккаунт.",
+                key="kwork-auth",
+            )
+            return
+
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=s.kwork_headless)
-            context = await browser.new_context(user_agent=_USER_AGENT)
+            context = await browser.new_context(
+                user_agent=_USER_AGENT,
+                storage_state=s.kwork_storage_state,
+            )
             page = await context.new_page()
             try:
-                if s.kwork_login and s.kwork_password:
-                    await self._login(page)
                 log.info(
                     "Kwork-парсер запущен (интервал: %s с, url: %s)",
                     s.kwork_poll_interval,
@@ -81,19 +96,7 @@ class KworkParser(BaseParser):
                 await context.close()
                 await browser.close()
 
-    async def _login(self, page: Page) -> None:
-        """Авторизация на Kwork. Селекторы могут потребовать обновления."""
-        try:
-            await page.goto("https://kwork.ru/login", wait_until="domcontentloaded")
-            await page.fill("input[name='l_username'], input[name='login']", self._settings.kwork_login)
-            await page.fill("input[name='l_password'], input[name='password']", self._settings.kwork_password)
-            await page.click("button[type='submit'], .b-button--login")
-            await page.wait_for_load_state("networkidle")
-            log.info("Kwork: авторизация выполнена")
-        except PWTimeout:
-            log.warning("Kwork: не удалось авторизоваться (таймаут) — работаем как гость")
-
-    async def _scrape(self, page: Page) -> int:
+    async def _scrape(self, page) -> int:
         await page.goto(self._settings.kwork_url, wait_until="domcontentloaded")
         try:
             await page.wait_for_selector(CARD_SELECTOR, timeout=15_000)

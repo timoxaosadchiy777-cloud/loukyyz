@@ -52,11 +52,11 @@ class Settings(BaseSettings):
 
     # --- Kwork (Playwright-парсер) ---
     kwork_enabled: bool = Field(False, alias="KWORK_ENABLED")
-    kwork_login: str = Field("", alias="KWORK_LOGIN")
-    kwork_password: str = Field("", alias="KWORK_PASSWORD")
     kwork_url: str = Field("https://kwork.ru/projects", alias="KWORK_URL")
     kwork_poll_interval: int = Field(180, alias="KWORK_POLL_INTERVAL")
     kwork_headless: bool = Field(True, alias="KWORK_HEADLESS")
+    # Файл сохранённой сессии браузера (создаётся скриптом kwork_login.py).
+    kwork_storage_state: str = Field("kwork_state.json", alias="KWORK_STORAGE_STATE")
 
     # --- Фильтрация мусора ---
     min_budget: int = Field(2000, alias="MIN_BUDGET")
