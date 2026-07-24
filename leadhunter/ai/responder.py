@@ -1,36 +1,23 @@
-"""Генератор откликов на базе Claude (Anthropic API).
+"""Генератор откликов на базе Google Gemini.
 
 Пишет короткий, жёсткий и профессиональный отклик-решение под ТЗ клиента —
-без приветствий, вводных слов и клише.
+без приветствий, вводных слов и клише. Бесплатный ключ берётся в Google AI
+Studio (https://aistudio.google.com).
 """
 
 from __future__ import annotations
 
 import logging
 
-from anthropic import (
-    APIConnectionError,
-    APIError,
-    APITimeoutError,
-    AsyncAnthropic,
-    InternalServerError,
-    RateLimitError,
-)
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
 
 from config import Settings
 from core.models import Order
 from core.retry import retry_async
 
 log = logging.getLogger(__name__)
-
-# Временные сбои, которые имеет смысл ретраить (429, 5xx, сеть/таймаут).
-# Ошибки вроде 400/401/403 сюда НЕ входят — их ретраить бессмысленно.
-_RETRYABLE = (
-    RateLimitError,
-    InternalServerError,
-    APIConnectionError,
-    APITimeoutError,
-)
 
 SYSTEM_PROMPT = """\
 Ты — senior-специалист, который откликается на фриланс-заказы. По тексту ТЗ \
@@ -48,67 +35,73 @@ SYSTEM_PROMPT = """\
 """
 
 
+def _is_retryable(exc: BaseException) -> bool:
+    """Ретраим 429 (rate limit) и 5xx; постоянные 4xx (400/403/…) — нет."""
+    if isinstance(exc, genai_errors.ClientError):
+        return getattr(exc, "code", None) == 429
+    return True  # ServerError (5xx) и прочие сетевые сбои
+
+
 class Responder:
-    """Оборачивает Claude API для генерации откликов."""
+    """Оборачивает Google Gemini для генерации откликов."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        # max_retries=0: ретраями управляем сами (core.retry) — единый бэкофф и логи.
-        # Пустой api_key => SDK возьмёт ANTHROPIC_API_KEY / профиль из окружения.
-        self._client = AsyncAnthropic(
-            api_key=settings.anthropic_api_key or None,
-            max_retries=0,
+        # Клиент создаём только при наличии ключа; иначе generate() тихо отдаёт None.
+        self._client = (
+            genai.Client(api_key=settings.gemini_api_key)
+            if settings.gemini_ready
+            else None
         )
 
     async def generate(self, order: Order) -> str | None:
-        """Возвращает текст отклика или ``None`` при ошибке/отказе.
+        """Возвращает текст отклика или ``None`` при ошибке/отсутствии ключа.
 
         Временные сбои (429/5xx/сеть) ретраятся с экспоненциальной задержкой;
-        постоянные (400/401/…) обрываются сразу.
+        постоянные (400/403/…) обрываются сразу.
         """
-        if not self._settings.anthropic_ready:
-            log.warning("ANTHROPIC_API_KEY не задан — отклик не сгенерирован")
+        if self._client is None:
+            log.warning("GEMINI_API_KEY не задан — отклик не сгенерирован")
             return None
 
         user_content = (
             f"Заголовок заказа:\n{order.title}\n\n"
             f"Текст ТЗ:\n{order.description.strip()}"
         )
-
-        request: dict = {
-            "model": self._settings.anthropic_model,
-            "max_tokens": self._settings.anthropic_max_tokens,
-            "system": SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": user_content}],
-            "output_config": {"effort": self._settings.anthropic_effort},
-        }
-        # Адаптивное мышление повышает качество отклика; управляется через .env.
-        if self._settings.anthropic_thinking:
-            request["thinking"] = {"type": "adaptive"}
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            max_output_tokens=self._settings.gemini_max_tokens,
+            temperature=self._settings.gemini_temperature,
+        )
 
         try:
             response = await retry_async(
-                lambda: self._client.messages.create(**request),
+                lambda: self._client.aio.models.generate_content(
+                    model=self._settings.gemini_model,
+                    contents=user_content,
+                    config=config,
+                ),
                 attempts=self._settings.retry_attempts,
                 base_delay=self._settings.retry_base_delay,
-                exceptions=_RETRYABLE,
-                label=f"claude:{order.dedup_key}",
+                exceptions=(genai_errors.APIError,),
+                retry_if=_is_retryable,
+                label=f"gemini:{order.dedup_key}",
             )
-        except _RETRYABLE as exc:
-            log.error("Claude API недоступен после ретраев (%s): %s", order.dedup_key, exc)
-            return None
-        except APIError as exc:  # постоянные ошибки (400/401/403/…)
-            log.error("Ошибка Claude API для %s: %s", order.dedup_key, exc)
+        except genai_errors.APIError as exc:
+            log.error("Ошибка Gemini API для %s: %s", order.dedup_key, exc)
             return None
 
-        if response.stop_reason == "refusal":
-            log.warning("Claude отказался отвечать по заказу %s", order.dedup_key)
+        if not response.candidates:
+            log.warning("Gemini не вернул ответ по заказу %s (фильтр/пустой)", order.dedup_key)
             return None
 
-        text = "".join(
-            block.text for block in response.content if block.type == "text"
-        ).strip()
+        try:
+            text = (response.text or "").strip()
+        except Exception:  # .text может бросать, если ответ заблокирован фильтром
+            log.warning("Gemini: ответ по %s отфильтрован", order.dedup_key)
+            return None
         return text or None
 
     async def aclose(self) -> None:
-        await self._client.close()
+        # У google-genai нет обязательного закрытия клиента — метод для симметрии API.
+        return None

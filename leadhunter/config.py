@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -15,8 +15,6 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 # Списки читаем из CSV-строк окружения (`a, b, c`), а не из JSON — так удобнее
 # заполнять `.env` вручную. NoDecode отключает попытку pydantic распарсить JSON.
 CsvList = Annotated[list[str], NoDecode]
-
-EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 class Settings(BaseSettings):
@@ -41,12 +39,11 @@ class Settings(BaseSettings):
     bot_token: str = Field("", alias="BOT_TOKEN")
     owner_id: int = Field(0, alias="OWNER_ID")
 
-    # --- Anthropic (Claude) ---
-    anthropic_api_key: str = Field("", alias="ANTHROPIC_API_KEY")
-    anthropic_model: str = Field("claude-opus-4-8", alias="ANTHROPIC_MODEL")
-    anthropic_max_tokens: int = Field(4096, alias="ANTHROPIC_MAX_TOKENS")
-    anthropic_thinking: bool = Field(True, alias="ANTHROPIC_THINKING")
-    anthropic_effort: EffortLevel = Field("medium", alias="ANTHROPIC_EFFORT")
+    # --- Google Gemini (генерация откликов) ---
+    gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
+    gemini_model: str = Field("gemini-2.5-flash", alias="GEMINI_MODEL")
+    gemini_max_tokens: int = Field(1024, alias="GEMINI_MAX_TOKENS")
+    gemini_temperature: float = Field(0.7, alias="GEMINI_TEMPERATURE")
 
     # --- Устойчивость: ретраи и алёрты ---
     retry_attempts: int = Field(3, alias="RETRY_ATTEMPTS")
@@ -92,8 +89,8 @@ class Settings(BaseSettings):
         return bool(self.tg_api_id and self.tg_api_hash)
 
     @property
-    def anthropic_ready(self) -> bool:
-        return bool(self.anthropic_api_key)
+    def gemini_ready(self) -> bool:
+        return bool(self.gemini_api_key)
 
 
 @lru_cache

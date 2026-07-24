@@ -55,14 +55,14 @@ async def handle_order(
         await db.save_order(order, response="", status="filtered")
         return
 
-    # 3. Генерация отклика через Claude.
+    # 3. Генерация отклика через Gemini.
     log.info("Новый заказ %s — генерирую отклик", order.dedup_key)
     response = await responder.generate(order)
     if not response:
         response = "(Не удалось сгенерировать отклик автоматически — сформулируй вручную по ТЗ.)"
         # Систематические сбои ИИ подсвечиваем владельцу (с троттлингом).
         await alerter.alert(
-            "Claude не смог сгенерировать отклик — карточки уходят без ИИ-текста. Проверь логи/ключ.",
+            "Gemini не смог сгенерировать отклик — карточки уходят без ИИ-текста. Проверь логи/ключ.",
             key="ai-failure",
         )
 

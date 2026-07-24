@@ -1,5 +1,5 @@
 # LeadHunter — зависимости (Python 3.12+)
-anthropic>=0.69
+google-genai>=1.0
 aiogram>=3.13
 telethon>=1.36
 playwright>=1.47

@@ -18,6 +18,7 @@ async def retry_async(
     base_delay: float = 2.0,
     max_delay: float = 30.0,
     exceptions: tuple[type[BaseException], ...] = (Exception,),
+    retry_if: Callable[[BaseException], bool] | None = None,
     label: str = "op",
 ) -> T:
     """Выполняет ``factory()`` с повторами при перечисленных исключениях.
@@ -31,6 +32,10 @@ async def retry_async(
         base_delay: Базовая задержка в секундах.
         max_delay: Верхняя граница задержки.
         exceptions: Кортеж retryable-исключений.
+        retry_if: Опциональный предикат — если задан и вернул ``False`` для
+            пойманного исключения, оно пробрасывается сразу (не ретраится).
+            Нужен, когда один класс исключений содержит и временные, и
+            постоянные ошибки (например, HTTP 429 vs 400 в одном типе).
         label: Метка для логов.
 
     Returns:
@@ -46,6 +51,8 @@ async def retry_async(
         try:
             return await factory()
         except exceptions as exc:
+            if retry_if is not None and not retry_if(exc):
+                raise
             last_exc = exc
             if attempt >= attempts:
                 break
