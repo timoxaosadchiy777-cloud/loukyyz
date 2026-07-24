@@ -1,8 +1,6 @@
 # Секреты и данные — не запекаем в образ (передаются через env_file и том)
 .env
 data/
-storage_state.json
-kwork_state.json
 *.db
 *.sqlite
 *.sqlite3

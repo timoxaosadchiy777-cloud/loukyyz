@@ -12,8 +12,9 @@ from core.models import Order
 _DIVIDER = "━━━━━━━━━━━━━━━━━━━━━"
 
 _SOURCE_LABELS = {
-    "telegram": "Telegram",
-    "kwork": "Kwork",
+    "upwork": "Upwork",
+    "fiverr": "Fiverr",
+    "rss": "RSS",
 }
 
 
@@ -21,7 +22,7 @@ def _format_budget(order: Order) -> str:
     if order.budget_raw:
         return order.budget_raw
     if order.budget_value is not None:
-        return f"{order.budget_value:,} ₽".replace(",", " ")
+        return f"${order.budget_value:,}".replace(",", " ")
     return "не указан"
 
 

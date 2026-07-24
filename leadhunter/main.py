@@ -1,12 +1,11 @@
 """LeadHunter — точка входа.
 
 Запускает асинхронно три компонента:
-  1. Kwork-парсер (Playwright) — свежие заказы с биржи.
+  1. RSS-парсер — свежие лиды с международных площадок (Upwork RSS, джоб-борды).
   2. Пайплайн обработки — дедуп → фильтр → генерация отклика → пуш карточки.
   3. Aiogram-бот — доставка карточек и инлайн-управление.
 
-Запуск неинтерактивный: без ввода с консоли, без авторизации пользователя и
-без ожидания кода. Вход в Kwork выполняется отдельно один раз (kwork_login.py).
+Запуск неинтерактивный: без ввода с консоли, без авторизации и ожидания кода.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from core.filters import is_junk, parse_budget
 from core.logging import setup_logging
 from core.models import Order
 from database.db import Database
-from parsers.kwork_parser import KworkParser
+from parsers.rss_parser import RssParser
 
 log = logging.getLogger("leadhunter")
 
@@ -37,8 +36,10 @@ async def handle_order(
     settings: Settings,
 ) -> None:
     """Обрабатывает один заказ по всей цепочке."""
-    if order.budget_value is None:
-        order.budget_value = parse_budget(order.budget_raw or order.description)
+    # Бюджет берём только из явно распознанной суммы (budget_raw), а не из всего
+    # описания — иначе случайные числа в тексте вакансии дадут ложный фильтр.
+    if order.budget_value is None and order.budget_raw:
+        order.budget_value = parse_budget(order.budget_raw)
 
     # 1. Дедупликация по источнику + external_id.
     if await db.is_duplicate(order.source, order.external_id):
@@ -120,11 +121,11 @@ async def main() -> None:
     alerter = Alerter(bot, settings.owner_id, settings.alert_cooldown)
 
     queue: "asyncio.Queue[Order]" = asyncio.Queue()
-    kwork = KworkParser(queue, settings, alerter)
+    rss = RssParser(queue, settings, alerter)
 
     tasks = [
         asyncio.create_task(dp.start_polling(bot), name="bot"),
-        asyncio.create_task(kwork.run_safe(), name="kwork"),
+        asyncio.create_task(rss.run_safe(), name="rss"),
         asyncio.create_task(
             process_orders(
                 queue,

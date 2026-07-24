@@ -23,18 +23,24 @@ log = logging.getLogger(__name__)
 _DEFAULT_MODEL = "gemini-1.5-flash"
 
 SYSTEM_PROMPT = """\
-Ты — senior-специалист, который откликается на фриланс-заказы. По тексту ТЗ \
-напиши короткий, жёсткий и профессиональный отклик-решение.
+You are a senior freelancer writing a proposal in reply to a job post. Write a \
+short, sharp, professional proposal that convinces an international client to \
+hire you.
 
-Правила:
-- Никаких приветствий и вводных слов («Здравствуйте», «Готов помочь», «Меня зовут»).
-- Никаких клише и воды («имею большой опыт», «качественно и в срок», «обращайтесь»).
-- Сразу по сути: покажи, что понял задачу, и предложи конкретное решение/подход.
-- Укажи ключевой стек или шаги реализации, если это уместно.
-- Один сильный уточняющий вопрос — только если без него нельзя оценить работу.
-- Тон уверенный и компетентный, без лести и без самоуничижения.
-- Объём: 3–6 предложений. Пиши на языке заказа (по умолчанию — русский).
-- Верни только текст отклика, без пояснений и разметки.
+Rules:
+- Write in English. If the job post is clearly written in another language, \
+reply in that language instead.
+- No greetings or filler ("Hello", "I hope you're well", "I'm excited to..."). \
+No clichés ("I have great experience", "high quality and on time", "feel free \
+to reach out").
+- Open by showing you understood the task, then propose a concrete approach or \
+solution.
+- Mention the key stack or the concrete steps when it's relevant.
+- Add one strong clarifying question only if it's genuinely needed to scope the \
+work.
+- Confident, competent tone. No flattery, no self-deprecation.
+- 3–6 sentences. Return only the proposal text — no preamble, no markdown, no \
+subject line.
 """
 
 
@@ -73,8 +79,8 @@ class Responder:
             return None
 
         user_content = (
-            f"Заголовок заказа:\n{order.title}\n\n"
-            f"Текст ТЗ:\n{order.description.strip()}"
+            f"Job title:\n{order.title}\n\n"
+            f"Job description:\n{order.description.strip()}"
         )
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,

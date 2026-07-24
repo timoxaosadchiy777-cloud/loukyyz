@@ -42,24 +42,40 @@ class Settings(BaseSettings):
     retry_base_delay: float = Field(2.0, alias="RETRY_BASE_DELAY")
     alert_cooldown: int = Field(300, alias="ALERT_COOLDOWN")
 
-    # --- Kwork (Playwright-парсер) ---
-    kwork_enabled: bool = Field(True, alias="KWORK_ENABLED")
-    kwork_url: str = Field("https://kwork.ru/projects", alias="KWORK_URL")
-    kwork_poll_interval: int = Field(180, alias="KWORK_POLL_INTERVAL")
-    kwork_headless: bool = Field(True, alias="KWORK_HEADLESS")
-    # Файл сохранённой сессии браузера (создаётся скриптом kwork_login.py).
-    kwork_storage_state: str = Field("storage_state.json", alias="KWORK_STORAGE_STATE")
+    # --- Источники лидов (RSS/Atom международных площадок) ---
+    # Список фидов через запятую. По умолчанию — публичные джоб-борды удалёнки;
+    # для Upwork добавьте URL вашего saved-search RSS.
+    feeds: CsvList = Field(
+        default_factory=lambda: [
+            "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+            "https://remoteok.com/remote-python-jobs.rss",
+        ],
+        alias="FEEDS",
+    )
+    feed_poll_interval: int = Field(300, alias="FEED_POLL_INTERVAL")
+    # Ключевые слова для отбора релевантных лидов (совпадение хотя бы одного).
+    keywords: CsvList = Field(
+        default_factory=lambda: [
+            "Python",
+            "automation",
+            "scraping",
+            "bot",
+            "text editing",
+            "proofreading",
+        ],
+        alias="KEYWORDS",
+    )
 
     # --- Фильтрация мусора ---
-    min_budget: int = Field(2000, alias="MIN_BUDGET")
+    min_budget: int = Field(50, alias="MIN_BUDGET")  # USD
     junk_phrases: CsvList = Field(
         default_factory=lambda: [
-            "за отзыв",
-            "за отзывы",
-            "бесплатно",
-            "за лайк",
-            "за репост",
-            "тестовое бесплатно",
+            "unpaid",
+            "no pay",
+            "for free",
+            "revenue share",
+            "rev share",
+            "equity only",
         ],
         alias="JUNK_PHRASES",
     )
@@ -68,10 +84,10 @@ class Settings(BaseSettings):
     database_path: str = Field("leadhunter.db", alias="DATABASE_PATH")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
-    @field_validator("junk_phrases", mode="before")
+    @field_validator("feeds", "keywords", "junk_phrases", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
-        """Позволяет задавать список одной строкой: `a, b, c`."""
+        """Позволяет задавать списки одной строкой: `a, b, c`."""
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
