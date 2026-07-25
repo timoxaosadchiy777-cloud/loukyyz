@@ -1,0 +1,29 @@
+# Секреты и данные — не запекаем в образ.
+.env
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+storage_state.json
+
+# Тесты и dev-инструменты не нужны в рантайме.
+tests/
+requirements-dev.txt
+pytest.ini
+scripts/
+
+# Python-артефакты.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Прочее.
+.git/
+.gitignore
+README.md

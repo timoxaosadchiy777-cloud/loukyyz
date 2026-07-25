@@ -24,6 +24,16 @@ class DeliveryRepository(BaseRepository[Delivery]):
         )
         return result.first() is not None
 
+    async def get_pair(self, lead_id: int, chat_id: int) -> Delivery | None:
+        """Возвращает запись доставки для пары (lead, chat) или ``None``."""
+        result = await self._session.execute(
+            select(Delivery).where(
+                Delivery.lead_id == lead_id,
+                Delivery.chat_id == chat_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def create(self, lead_id: int, chat_id: int, *, status: str = "queued") -> Delivery:
         delivery = Delivery(lead_id=lead_id, chat_id=chat_id, status=status)
         return await self.add(delivery)

@@ -1,0 +1,12 @@
+# kwork_bot — runtime-зависимости (Python 3.11+).
+# Сверено с реальными импортами проекта; лишних пакетов нет.
+google-genai>=1.0          # ai/gemini_client.py
+aiogram>=3.13              # telegram/*
+playwright>=1.47           # parsers/browser.py
+SQLAlchemy[asyncio]>=2.0   # models/*, database/*  (тянет greenlet для async)
+aiosqlite>=0.20            # async-драйвер SQLite
+alembic>=1.13              # migrations/*
+pydantic>=2.9              # schemas/*
+pydantic-settings>=2.5     # config/settings.py
+PyYAML>=6.0               # schemas/filters.py (загрузка filters.yaml)
+cryptography>=42.0         # security/signature.py (Ed25519)

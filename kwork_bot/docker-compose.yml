@@ -1,0 +1,11 @@
+services:
+  kwork_bot:
+    build: .
+    image: kwork_bot:latest
+    container_name: kwork_bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # SQLite и storage_state.json лежат в ./data; логи — в ./logs.
+      - ./data:/app/data
+      - ./logs:/app/logs

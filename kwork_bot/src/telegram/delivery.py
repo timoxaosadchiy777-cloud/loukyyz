@@ -69,17 +69,37 @@ class DeliveryService:
         """Ставит карточку в очередь отправки (реализация LeadDeliverer)."""
         await self._queue.put((lead, response))
 
-    async def worker(self) -> None:
-        """Бесконечный воркер очереди доставки (запускается в TaskGroup)."""
+    async def worker(self, stop_event: asyncio.Event | None = None) -> None:
+        """Воркер очереди доставки.
+
+        Без `stop_event` работает бесконечно (управляется отменой задачи).
+        С `stop_event` кооперативно завершается: периодически проверяет флаг и
+        дренит остаток очереди перед выходом (graceful shutdown).
+        """
         log.info("DeliveryService: воркер запущен")
-        while True:
-            lead, response = await self._queue.get()
-            try:
-                await self._deliver(lead, response)
-            except Exception:  # noqa: BLE001 — воркер не должен падать
-                log.exception("DeliveryService: непредвиденная ошибка доставки заказа %s", lead.id)
-            finally:
-                self._queue.task_done()
+        while stop_event is None or not stop_event.is_set():
+            if stop_event is None:
+                lead, response = await self._queue.get()
+            else:
+                try:
+                    lead, response = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+            await self._safe_deliver(lead, response)
+
+        # Дренаж остатка при остановке.
+        while not self._queue.empty():
+            lead, response = self._queue.get_nowait()
+            await self._safe_deliver(lead, response)
+        log.info("DeliveryService: воркер остановлен")
+
+    async def _safe_deliver(self, lead: LeadRead, response: str | None) -> None:
+        try:
+            await self._deliver(lead, response)
+        except Exception:  # noqa: BLE001 — воркер не должен падать
+            log.exception("DeliveryService: непредвиденная ошибка доставки заказа %s", lead.id)
+        finally:
+            self._queue.task_done()
 
     async def _deliver(self, lead: LeadRead, response: str | None) -> None:
         chat_id = self._owner_id
@@ -87,14 +107,15 @@ class DeliveryService:
             log.warning("OWNER_ID не задан — карточка %s не отправлена", lead.id)
             return
 
-        # Антидубль + регистрация доставки.
+        # Антидубль по факту УСПЕШНОЙ отправки; запись со статусом queued/failed
+        # переиспользуем (пережили перезапуск), новую создаём только при отсутствии.
         async with self._database.session() as session:
             repo = DeliveryRepository(session)
-            if await repo.exists(lead.id, chat_id):
-                log.info("Заказ %s уже доставлялся в чат %s — пропуск", lead.id, chat_id)
+            existing = await repo.get_pair(lead.id, chat_id)
+            if existing is not None and existing.status == "sent":
+                log.info("Заказ %s уже доставлен в чат %s — пропуск", lead.id, chat_id)
                 return
-            delivery = await repo.create(lead.id, chat_id)
-            delivery_id = delivery.id
+            delivery_id = existing.id if existing is not None else (await repo.create(lead.id, chat_id)).id
 
         text = render_card(lead, response)
         markup = lead_keyboard(lead.id, lead.url)
