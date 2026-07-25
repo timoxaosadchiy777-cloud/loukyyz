@@ -1,7 +1,8 @@
 """Репозитории доступа к данным."""
 
 from database.repositories.base import BaseRepository
+from database.repositories.delivery_repo import DeliveryRepository
 from database.repositories.lead_repo import LeadRepository
 from database.repositories.license_repo import LicenseRepository
 
-__all__ = ["BaseRepository", "LeadRepository", "LicenseRepository"]
+__all__ = ["BaseRepository", "LeadRepository", "LicenseRepository", "DeliveryRepository"]
