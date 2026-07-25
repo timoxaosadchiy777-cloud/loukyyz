@@ -43,7 +43,11 @@ class LeadService:
 
     async def process_once(self) -> int:
         """Один проход пайплайна. Возвращает число заказов, ушедших в доставку."""
-        leads = await self._source.fetch_leads()
+        try:
+            leads = await self._source.fetch_leads()
+        except Exception:  # noqa: BLE001 — сбой источника не роняет проход
+            log.exception("Ошибка получения заказов из источника")
+            return 0
         delivered = 0
         for data in leads:
             try:
