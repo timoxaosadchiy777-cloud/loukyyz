@@ -53,38 +53,19 @@ class Settings(BaseSettings):
         alias="FEEDS",
     )
     feed_poll_interval: int = Field(300, alias="FEED_POLL_INTERVAL")
-    # Ключевые слова для отбора релевантных лидов (совпадение хотя бы одного).
-    keywords: CsvList = Field(
-        default_factory=lambda: [
-            "Python",
-            "automation",
-            "scraping",
-            "bot",
-            "text editing",
-            "proofreading",
-        ],
-        alias="KEYWORDS",
-    )
 
-    # --- Фильтрация мусора ---
-    min_budget: int = Field(50, alias="MIN_BUDGET")  # USD
-    junk_phrases: CsvList = Field(
-        default_factory=lambda: [
-            "unpaid",
-            "no pay",
-            "for free",
-            "revenue share",
-            "rev share",
-            "equity only",
-        ],
-        alias="JUNK_PHRASES",
-    )
+    # --- AI Lead Scoring ---
+    # Профиль исполнителя: ИИ читает его и по смыслу оценивает заказы.
+    profile_path: str = Field("profile.md", alias="PROFILE_PATH")
+    # Оперативные настройки (min_score / min_budget / enabled_sources) — правятся
+    # на ходу в этом YAML, без перезапуска (см. core/runtime_config.py).
+    runtime_config_path: str = Field("settings.yaml", alias="RUNTIME_CONFIG_PATH")
 
     # --- Прочее ---
     database_path: str = Field("leadhunter.db", alias="DATABASE_PATH")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
-    @field_validator("feeds", "keywords", "junk_phrases", mode="before")
+    @field_validator("feeds", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         """Позволяет задавать списки одной строкой: `a, b, c`."""

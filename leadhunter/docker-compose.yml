@@ -6,7 +6,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # Базу держим на томе — переживает пересборку контейнера.
+      # Базу и оперативные настройки держим на томе — переживают пересборку.
       DATABASE_PATH: /app/data/leadhunter.db
+      RUNTIME_CONFIG_PATH: /app/data/settings.yaml
     volumes:
       - ./data:/app/data
+      # Профиль монтируем с хоста — правьте его без пересборки образа (hot-reload).
+      - ./profile.md:/app/profile.md

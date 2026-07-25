@@ -1,10 +1,13 @@
-"""Фильтрация мусора и парсинг бюджета."""
+"""Парсинг бюджета.
+
+Фильтрация по ключевым словам и стоп-фразам убрана в LeadHunter 2.0: решение о
+релевантности принимает ИИ (см. :mod:`ai.scoring`). Здесь остаётся только разбор
+суммы бюджета — он нужен как дешёвый предварительный фильтр ДО обращения к LLM.
+"""
 
 from __future__ import annotations
 
 import re
-
-from core.models import Order
 
 # Первое «число» в строке: допускаем пробелы/точки/запятые как разделители разрядов.
 _NUMBER_RE = re.compile(r"\d[\d\s.,]*")
@@ -22,26 +25,3 @@ def parse_budget(text: str | None) -> int | None:
         return None
     digits = re.sub(r"\D", "", match.group(0))
     return int(digits) if digits else None
-
-
-def is_junk(
-    order: Order,
-    *,
-    min_budget: int,
-    junk_phrases: list[str],
-) -> tuple[bool, str]:
-    """Проверяет, является ли заказ мусором.
-
-    Returns:
-        Кортеж ``(is_junk, reason)``. ``reason`` пуст, если заказ валиден.
-    """
-    haystack = f"{order.title}\n{order.description}".lower()
-
-    for phrase in junk_phrases:
-        if phrase and phrase.lower() in haystack:
-            return True, f"стоп-фраза: {phrase!r}"
-
-    if order.budget_value is not None and order.budget_value < min_budget:
-        return True, f"низкий бюджет: {order.budget_value} < {min_budget}"
-
-    return False, ""

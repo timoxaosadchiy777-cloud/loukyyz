@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import logging
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
-from bot.callbacks import OrderAction
+from bot.callbacks import CrmAction, OrderAction
 from bot.cards import render_card
 from bot.keyboards import order_keyboard
 from config import Settings
-from core.models import Order
+from core.models import CRM_LABELS, CrmStatus, Order
 from database.db import Database
 
 log = logging.getLogger(__name__)
@@ -35,13 +35,15 @@ async def on_start(message: Message, owner_id: int) -> None:
         return
     await message.answer(
         "👋 <b>LeadHunter</b> на связи.\n"
-        "Сюда будут прилетать карточки свежих заказов с готовыми откликами.\n\n"
+        "Сюда прилетают карточки заказов с AI-оценкой и готовым откликом.\n"
+        "Кнопки под карточкой ведут заказ по воронке: Написал → Переговоры → "
+        "Выиграл/Проиграл.\n\n"
         f"Твой user id: <code>{message.from_user.id}</code>"
     )
 
 
-@router.callback_query(OrderAction.filter(F.action == "accept"))
-async def on_accept(
+@router.callback_query(OrderAction.filter())
+async def on_order_action(
     query: CallbackQuery,
     callback_data: OrderAction,
     db: Database,
@@ -56,20 +58,21 @@ async def on_accept(
         await query.answer("Заказ не найден", show_alert=True)
         return
 
-    await db.set_status(callback_data.order_id, "accepted")
-    response = row["response"] or "(отклик отсутствует)"
+    if callback_data.action == "copy":
+        response = row["response"] or "(отклик отсутствует)"
+        if isinstance(query.message, Message):
+            # Чистый текст отдельным сообщением — удобно копировать/пересылать.
+            await query.message.answer(response, parse_mode=None)
+        await query.answer("Отклик готов — копируй и отправляй 🚀")
+        return
 
-    if isinstance(query.message, Message):
-        # Присылаем чистый текст отдельным сообщением — удобно копировать/пересылать.
-        await query.message.answer(response, parse_mode=None)
-        await query.message.edit_reply_markup(reply_markup=None)
-    await query.answer("Отклик готов — копируй и отправляй 🚀")
+    await query.answer()
 
 
-@router.callback_query(OrderAction.filter(F.action == "skip"))
-async def on_skip(
+@router.callback_query(CrmAction.filter())
+async def on_crm_action(
     query: CallbackQuery,
-    callback_data: OrderAction,
+    callback_data: CrmAction,
     db: Database,
     owner_id: int,
 ) -> None:
@@ -77,10 +80,31 @@ async def on_skip(
         await query.answer("Недоступно", show_alert=True)
         return
 
-    await db.set_status(callback_data.order_id, "skipped")
+    status = callback_data.status
+    if status not in CrmStatus.ALL:
+        await query.answer("Неизвестный статус", show_alert=True)
+        return
+
+    await db.set_crm_status(callback_data.order_id, status)
+    row = await db.get_order(callback_data.order_id)
+    if row is None:
+        await query.answer("Заказ не найден", show_alert=True)
+        return
+
+    # Перерисовываем карточку с новым статусом воронки.
+    order = Order.from_row(row)
+    response = row["response"] or "(отклик отсутствует)"
     if isinstance(query.message, Message):
-        await query.message.edit_reply_markup(reply_markup=None)
-    await query.answer("Скипнуто ❌")
+        try:
+            await query.message.edit_text(
+                render_card(order, response),
+                reply_markup=order_keyboard(callback_data.order_id, status),
+                link_preview_options=_NO_PREVIEW,
+            )
+        except Exception:
+            # Повторное нажатие того же статуса → «message is not modified».
+            log.debug("Карточка %s не изменилась", callback_data.order_id)
+    await query.answer(f"Статус: {CRM_LABELS.get(status, status)}")
 
 
 def create_bot(settings: Settings) -> Bot:
@@ -110,6 +134,6 @@ async def push_card(
     await bot.send_message(
         owner_id,
         render_card(order, response),
-        reply_markup=order_keyboard(order_id),
+        reply_markup=order_keyboard(order_id, order.crm_status),
         link_preview_options=_NO_PREVIEW,
     )

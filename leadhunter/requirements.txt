@@ -1,7 +1,8 @@
-# LeadHunter — зависимости (Python 3.12+)
+# LeadHunter — зависимости (Python 3.11+)
 google-genai>=1.0
 aiogram>=3.13
 feedparser>=6.0
 aiosqlite>=0.20
 pydantic>=2.9
 pydantic-settings>=2.5
+PyYAML>=6.0

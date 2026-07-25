@@ -52,7 +52,6 @@ class RssParser(BaseParser):
     ) -> None:
         super().__init__(queue, alerter)
         self._settings = settings
-        self._keywords = [k.lower() for k in settings.keywords]
 
     async def run(self) -> None:
         feeds = self._settings.feeds
@@ -60,17 +59,18 @@ class RssParser(BaseParser):
             log.warning("RSS-парсер выключен: список FEEDS пуст.")
             return
 
+        # Отбор по смыслу выполняет ИИ ниже по конвейеру (ai.scoring): парсер
+        # больше не фильтрует по ключевым словам, а отдаёт все свежие лиды.
         log.info(
-            "RSS-парсер запущен: фидов — %s, интервал — %s c, ключевых слов — %s",
+            "RSS-парсер запущен: фидов — %s, интервал — %s c",
             len(feeds),
             self._settings.feed_poll_interval,
-            len(self._keywords) or "без фильтра",
         )
         while True:
             for url in feeds:
                 try:
                     emitted = await self._poll_feed(url)
-                    log.info("RSS %s: новых подходящих лидов — %s", _host(url), emitted)
+                    log.info("RSS %s: новых лидов в очередь — %s", _host(url), emitted)
                 except Exception as exc:
                     log.exception("RSS: ошибка обработки фида %s", url)
                     await self.alert(
@@ -98,17 +98,11 @@ class RssParser(BaseParser):
         emitted = 0
         for entry in entries:
             order = self._entry_to_order(entry, source)
-            if order is None or not self._matches_keywords(order):
+            if order is None:
                 continue
             await self.emit(order)
             emitted += 1
         return emitted
-
-    def _matches_keywords(self, order: Order) -> bool:
-        if not self._keywords:
-            return True
-        haystack = f"{order.title}\n{order.description}".lower()
-        return any(keyword in haystack for keyword in self._keywords)
 
     def _entry_to_order(self, entry, source: str) -> Order | None:
         title = _clean(getattr(entry, "title", "") or "")
