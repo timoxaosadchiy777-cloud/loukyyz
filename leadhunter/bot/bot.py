@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
+from bot.access import AccessControl
 from bot.callbacks import CrmAction, OrderAction
 from bot.cards import render_card
 from bot.keyboards import order_keyboard
@@ -24,21 +25,30 @@ router = Router(name="leadhunter")
 _NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
-def _is_owner(user_id: int | None, owner_id: int) -> bool:
-    # owner_id == 0 → фильтр не настроен, пропускаем всех (dev-режим).
-    return owner_id == 0 or user_id == owner_id
-
-
 @router.message(CommandStart())
-async def on_start(message: Message, owner_id: int) -> None:
-    if not _is_owner(message.from_user.id if message.from_user else None, owner_id):
+async def on_start(message: Message, db: Database, access: AccessControl) -> None:
+    user = message.from_user
+    if user is None:
         return
+
+    # Регистрируем при первом контакте: так администратор видит человека
+    # в /users и может выдать ему доступ. Уже выданный доступ не сбрасывается.
+    await db.register_user(user.id, user.username or "")
+
+    if not await access.has_access(user.id):
+        await message.answer(
+            "🔒 <b>LeadHunter</b> — доступ по подписке.\n\n"
+            "Твой Telegram ID: <code>{user_id}</code>\n"
+            "Отправь его администратору, чтобы получить доступ.".format(user_id=user.id)
+        )
+        return
+
     await message.answer(
         "👋 <b>LeadHunter</b> на связи.\n"
         "Сюда прилетают карточки заказов с AI-оценкой и готовым откликом.\n"
         "Кнопки под карточкой ведут заказ по воронке: Написал → Переговоры → "
         "Выиграл/Проиграл.\n\n"
-        f"Твой user id: <code>{message.from_user.id}</code>"
+        f"Твой user id: <code>{user.id}</code>"
     )
 
 
@@ -47,10 +57,10 @@ async def on_order_action(
     query: CallbackQuery,
     callback_data: OrderAction,
     db: Database,
-    owner_id: int,
+    access: AccessControl,
 ) -> None:
-    if not _is_owner(query.from_user.id, owner_id):
-        await query.answer("Недоступно", show_alert=True)
+    if not await access.has_access(query.from_user.id):
+        await query.answer("Нет доступа", show_alert=True)
         return
 
     row = await db.get_order(callback_data.order_id)
@@ -74,10 +84,10 @@ async def on_crm_action(
     query: CallbackQuery,
     callback_data: CrmAction,
     db: Database,
-    owner_id: int,
+    access: AccessControl,
 ) -> None:
-    if not _is_owner(query.from_user.id, owner_id):
-        await query.answer("Недоступно", show_alert=True)
+    if not await access.has_access(query.from_user.id):
+        await query.answer("Нет доступа", show_alert=True)
         return
 
     status = callback_data.status
@@ -119,6 +129,7 @@ def create_dispatcher(db: Database, settings: Settings) -> Dispatcher:
     # Зависимости прокидываются в хендлеры по имени аргумента.
     dp["db"] = db
     dp["owner_id"] = settings.owner_id
+    dp["access"] = AccessControl(db, settings.owner_id)
     dp.include_router(router)
     return dp
 
