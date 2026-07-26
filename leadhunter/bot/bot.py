@@ -11,6 +11,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
 from bot.access import AccessControl
+from bot.admin import admin_router
 from bot.callbacks import CrmAction, OrderAction
 from bot.cards import render_card
 from bot.keyboards import order_keyboard
@@ -130,6 +131,8 @@ def create_dispatcher(db: Database, settings: Settings) -> Dispatcher:
     dp["db"] = db
     dp["owner_id"] = settings.owner_id
     dp["access"] = AccessControl(db, settings.owner_id)
+    # Админский роутер — первым: его команды видит только владелец.
+    dp.include_router(admin_router)
     dp.include_router(router)
     return dp
 
