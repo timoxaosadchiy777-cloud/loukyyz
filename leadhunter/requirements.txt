@@ -1,5 +1,6 @@
 # LeadHunter — зависимости (Python 3.11+)
-google-genai>=1.0
+httpx>=0.27           # HTTP-клиент для AI-провайдеров (OpenRouter, Groq, Ollama)
+google-genai>=1.0     # Gemini (крайний fallback)
 aiogram>=3.13
 feedparser>=6.0
 aiosqlite>=0.20

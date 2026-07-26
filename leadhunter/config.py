@@ -48,16 +48,31 @@ class Settings(BaseSettings):
     bot_token: str = Field("", alias="BOT_TOKEN")
     owner_id: int = Field(0, alias="OWNER_ID")
 
-    # --- Google Gemini (генерация откликов и скоринг) ---
+    # --- AI-провайдеры (скоринг и генерация откликов) ---
+    # Основной провайдер. Порядок fallback фиксирован: openrouter → groq → ollama
+    # → gemini; выбранный здесь встаёт первым. Значения: openrouter/groq/ollama/gemini.
+    ai_provider: str = Field("openrouter", alias="AI_PROVIDER")
+
+    # OpenRouter (основной, бесплатные модели) — https://openrouter.ai/keys
+    openrouter_api_key: str = Field("", alias="OPENROUTER_API_KEY")
+    openrouter_model: str = Field("deepseek/deepseek-chat:free", alias="OPENROUTER_MODEL")
+
+    # Groq (быстрый бесплатный fallback) — https://console.groq.com/keys
+    groq_api_key: str = Field("", alias="GROQ_API_KEY")
+    groq_model: str = Field("llama-3.3-70b-versatile", alias="GROQ_MODEL")
+
+    # Ollama (локальные модели). По умолчанию выключен — включите, если установлен.
+    ollama_enabled: bool = Field(False, alias="OLLAMA_ENABLED")
+    ollama_host: str = Field("http://localhost:11434", alias="OLLAMA_HOST")
+    ollama_model: str = Field("llama3.2", alias="OLLAMA_MODEL")
+
+    # Gemini (крайний fallback, если есть рабочий ключ) — одна модель, без внутр. fallback.
     gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
-    # gemini-1.5-flash выведён из обслуживания и отдаёт 404 — по умолчанию берём
-    # актуальную модель. Меняется через .env без правки кода.
     gemini_model: str = Field("gemini-2.0-flash", alias="GEMINI_MODEL")
-    # Резервная модель: используется, если основная недоступна (404) или её квота
-    # исчерпана (429). Тоже настраивается через .env.
-    gemini_fallback_model: str = Field("gemini-2.5-flash", alias="GEMINI_FALLBACK_MODEL")
-    gemini_max_tokens: int = Field(1024, alias="GEMINI_MAX_TOKENS")
-    gemini_temperature: float = Field(0.7, alias="GEMINI_TEMPERATURE")
+
+    # Общие параметры генерации (для всех провайдеров).
+    ai_max_tokens: int = Field(1024, alias="AI_MAX_TOKENS")
+    ai_temperature: float = Field(0.7, alias="AI_TEMPERATURE")
 
     # --- Устойчивость: ретраи и алёрты ---
     retry_attempts: int = Field(3, alias="RETRY_ATTEMPTS")

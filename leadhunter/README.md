@@ -12,7 +12,7 @@ RSS-фиды (Upwork RSS, джоб-борды, …)
         ↓
 🤖 AI Lead Scoring  — модель оценивает заказ по смыслу и вашему profile.md
         ↓  score ≥ min_score и модель рекомендует → дальше
-✍️  Gemini генерирует отклик
+✍️  AI генерирует отклик (OpenRouter / Groq / Ollama / Gemini — с fallback)
         ↓
 📲 Telegram: карточка с AI Score, категорией, причиной, откликом
         ↓
@@ -32,8 +32,9 @@ RSS-фиды (Upwork RSS, джоб-борды, …)
 
 - **Python 3.11+** · **asyncio**
 - **feedparser** — чтение RSS/Atom-фидов (модульный список источников)
-- **Абстрактный слой LLM** (`ai/llm.py`) — по умолчанию **Google Gemini**; сменить
-  модель/провайдера можно, не трогая остальную логику
+- **Мульти-провайдерный AI-слой** (`ai/llm.py` + `ai/providers/`) — бесплатные
+  OpenRouter / Groq / Ollama с автоматическим fallback (Gemini — крайний вариант)
+- **httpx** — async HTTP-клиент для AI-провайдеров
 - **Aiogram 3.x** — доставка карточек, кнопка копирования и CRM-воронка
 - **SQLite** (aiosqlite) — дедупликация, история, AI-оценки, CRM-статусы
 - **PyYAML** — оперативные настройки, редактируемые на ходу
@@ -60,9 +61,10 @@ leadhunter/
 │   └── logging.py           # настройка логирования
 │
 ├── ai/
-│   ├── llm.py               # абстракция LLMClient + GeminiLLM + create_llm()
+│   ├── llm.py               # LLMRouter: выбор провайдера + fallback
+│   ├── providers/           # base + openrouter + groq + ollama + gemini
 │   ├── scoring.py           # AI Lead Scoring (LLM → JSON → LeadScore)
-│   └── responder.py         # генерация отклика через LLM (English)
+│   └── responder.py         # генерация отклика (профиль + AI-анализ)
 │
 ├── database/
 │   └── db.py                # SQLite: дедуп, история, оценки, CRM (+миграция)
@@ -112,9 +114,11 @@ python main.py            # или:  python leadhunter/main.py
 |---|---|---|
 | `BOT_TOKEN` | токен бота-получателя | [@BotFather](https://t.me/BotFather) |
 | `OWNER_ID` | ваш Telegram id | [@userinfobot](https://t.me/userinfobot) |
-| `GEMINI_API_KEY` | ключ Google Gemini (бесплатный) | https://aistudio.google.com |
-| `GEMINI_MODEL` | модель Gemini | по умолчанию `gemini-2.0-flash` |
-| `GEMINI_FALLBACK_MODEL` | резервная модель (404/квота) | по умолчанию `gemini-2.5-flash` |
+| `AI_PROVIDER` | основной AI-провайдер | `openrouter` (по умолчанию) |
+| `OPENROUTER_API_KEY` | ключ OpenRouter (бесплатный) | https://openrouter.ai/keys |
+| `OPENROUTER_MODEL` | модель OpenRouter | `deepseek/deepseek-chat:free` |
+| `GROQ_API_KEY` | ключ Groq (бесплатный, fallback) | https://console.groq.com/keys |
+| `GEMINI_API_KEY` | ключ Gemini (крайний fallback) | https://aistudio.google.com |
 | `FEEDS` | список RSS-фидов через запятую | по умолчанию — публичные джоб-борды |
 | `FEED_POLL_INTERVAL` | период опроса фидов, сек | по умолчанию `300` |
 | `PROFILE_PATH` | путь к профилю исполнителя | по умолчанию `profile.md` |
@@ -158,25 +162,25 @@ python main.py            # или:  python leadhunter/main.py
 
 ### 🔍 Диагностика ИИ (если `AI Score: н/д`)
 
-Если карточки приходят с `AI Score: н/д` и «не удалось сгенерировать отклик» —
-ИИ вернул ошибку. Причина теперь видна в логах и через отдельную команду:
+Если карточки приходят с `AI Score: н/д` — ни один провайдер не ответил. Причина
+видна в логах и через отдельную команду:
 
 ```bash
 python check_ai.py
 ```
 
-Скрипт покажет: найден ли `GEMINI_API_KEY`, версию SDK, модели, и сделает
-реальный тестовый вызов — с ответом модели или точной ошибкой Gemini
-(код/статус/сообщение). Те же ошибки бот теперь пишет в лог явно:
+Скрипт по каждому провайдеру покажет: настроен ли он, какую модель использует, и
+сделает реальный тестовый вызов (`Status: OK / FAILED` + причина), а в конце — кто
+станет основным. Те же причины бот пишет в лог и в карточку явно:
 
 ```
-LLM диагностика: SDK=google-genai 2.14.0 | GEMINI_API_KEY=найден | модель=gemini-2.0-flash | fallback=gemini-2.5-flash
-GEMINI ERROR (model=gemini-2.0-flash, score:…): code=400 status=INVALID_ARGUMENT message=API key not valid.
+AI ERROR (provider=OpenRouter, score:…): лимит/квота исчерпаны (429)
+AI: ответ через Groq (score:…) после сбоев: OpenRouter: лимит/квота исчерпаны (429)
 ```
 
-Частые причины: `400/403` — неверный ключ или нет доступа к модели; `404` —
-устаревшая модель (смени `GEMINI_MODEL`); `429` — исчерпана квота (подожди или
-подключи биллинг/новый ключ).
+Частые причины: `401/403` — неверный ключ; `402` — нужен платный план; `404` —
+недоступная модель; `429` — исчерпан лимит. При любой из них роутер сам
+переключается на следующего провайдера.
 
 ---
 
@@ -210,15 +214,33 @@ enabled_sources: [upwork, fiverr, rss]
 
 ---
 
-## 🧠 Смена модели / провайдера LLM
+## 🧠 AI-провайдеры и fallback
 
-Вся работа с ИИ идёт через интерфейс `LLMClient` (`ai/llm.py`). Чтобы сменить
-модель или провайдера (другой Gemini, OpenAI, Anthropic, локальная модель):
+LeadHunter работает на **бесплатных** AI-провайдерах — платный Gemini больше не
+обязателен. Запросы идут через `LLMRouter` (`ai/llm.py`), который перебирает
+провайдеров по порядку и берёт первого, кто ответил:
 
-1. Напишите класс с методами `complete(...)` и `aclose()` (как `GeminiLLM`).
-2. Верните его из `create_llm(settings)`.
+```
+OpenRouter (free) → Groq (free) → Ollama (local) → Gemini (последний вариант)
+```
 
-Скоринг (`ai/scoring.py`) и генерация откликов (`ai/responder.py`) не изменятся.
+Если провайдер не настроен, вернул ошибку, упёрся в лимит или у него нет
+модели — роутер автоматически переходит к следующему. Достаточно **одного**
+бесплатного ключа (обычно OpenRouter). Каждый провайдер — это класс в
+`ai/providers/` с методом `generate(prompt) -> str`:
+
+```
+ai/providers/
+  base.py         # контракт AIProvider + ProviderError
+  openrouter.py   # основной (бесплатные модели)
+  groq.py         # быстрый бесплатный fallback
+  ollama.py       # локальные модели (по умолчанию выключен)
+  gemini.py       # крайний fallback
+```
+
+Добавить нового провайдера = написать класс с `generate(prompt)` и включить его в
+`_build_providers` (`ai/llm.py`). Скоринг (`ai/scoring.py`) и генерация откликов
+(`ai/responder.py`) не меняются — они ходят через роутер.
 
 ---
 

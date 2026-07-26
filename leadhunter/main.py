@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from ai.llm import create_llm
+from ai.llm import LLMRouter, create_llm
 from ai.responder import Responder
 from ai.scoring import ScoringService
 from bot.alerts import Alerter
@@ -50,6 +50,7 @@ async def handle_order(
     db: Database,
     scorer: ScoringService,
     responder: Responder,
+    llm: LLMRouter,
     bot,
     alerter: Alerter,
     settings: Settings,
@@ -105,19 +106,22 @@ async def handle_order(
         return
     if decision is None:
         # ИИ недоступен/не разобрал ответ. Не теряем лид и не откатываемся к
-        # ключевым словам: доставляем карточку с пометкой «оцените вручную».
-        log.warning("ИИ недоступен для %s — карточка уйдёт без оценки", order.dedup_key)
+        # ключевым словам: доставляем карточку, показывая РЕАЛЬНУЮ причину.
+        reason = llm.last_error or "не удалось разобрать ответ ИИ"
+        order.reason = f"AI недоступен — {reason}"
+        log.warning("AI ERROR для %s: %s", order.dedup_key, reason)
         await alerter.alert(
-            "ИИ не смог оценить заказы — карточки уходят без AI Score. Проверь ключ/логи.",
+            f"AI не смог оценить заказы. Причина: {reason}. Проверь: python check_ai.py",
             key="ai-scoring-failure",
         )
 
     # 5. Response — генерация отклика через LLM (с учётом профиля и AI-анализа).
     response = await responder.generate(order, analysis=lead_score)
     if not response:
-        response = _MANUAL_FALLBACK
+        reason = llm.last_error or "неизвестная ошибка"
+        response = f"{_MANUAL_FALLBACK}\nПричина: {reason}"
         await alerter.alert(
-            "Gemini не смог сгенерировать отклик — карточки уходят без ИИ-текста. Проверь логи/ключ.",
+            f"AI не сгенерировал отклик. Причина: {reason}. Проверь: python check_ai.py",
             key="ai-response-failure",
         )
 
@@ -142,6 +146,7 @@ async def process_orders(
     db: Database,
     scorer: ScoringService,
     responder: Responder,
+    llm: LLMRouter,
     bot,
     alerter: Alerter,
     settings: Settings,
@@ -156,6 +161,7 @@ async def process_orders(
                 db=db,
                 scorer=scorer,
                 responder=responder,
+                llm=llm,
                 bot=bot,
                 alerter=alerter,
                 settings=settings,
@@ -210,6 +216,7 @@ async def main() -> None:
                 db=db,
                 scorer=scorer,
                 responder=responder,
+                llm=llm,
                 bot=bot,
                 alerter=alerter,
                 settings=settings,

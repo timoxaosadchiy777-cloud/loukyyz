@@ -57,8 +57,8 @@ class Responder:
         return await self._llm.complete(
             system=system,
             user=user,
-            max_output_tokens=self._settings.gemini_max_tokens,
-            temperature=self._settings.gemini_temperature,
+            max_output_tokens=self._settings.ai_max_tokens,
+            temperature=self._settings.ai_temperature,
             label=f"proposal:{order.dedup_key}",
         )
 
