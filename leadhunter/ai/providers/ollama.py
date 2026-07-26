@@ -7,6 +7,8 @@ localhost, когда Ollama не установлен. Включите его 
 
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from ai.providers.base import AIProvider, ProviderError
@@ -69,10 +71,13 @@ class OllamaProvider(AIProvider):
         if resp.status_code == 404:
             raise ProviderError(self.name, f"модель не найдена — выполни: ollama pull {self._model}")
         if resp.status_code >= 400:
-            raise ProviderError(self.name, f"HTTP {resp.status_code}: {resp.text[:200]}")
+            body = resp.content.decode("utf-8", errors="replace")
+            raise ProviderError(self.name, f"HTTP {resp.status_code}: {body[:200]}")
 
+        # UTF-8 без опоры на угаданную httpx кодировку.
         try:
-            text = (resp.json().get("response") or "").strip()
+            data = json.loads(resp.content.decode("utf-8", errors="replace"))
+            text = (data.get("response") or "").strip()
         except ValueError as exc:
             raise ProviderError(self.name, f"неожиданный ответ: {exc}") from exc
 

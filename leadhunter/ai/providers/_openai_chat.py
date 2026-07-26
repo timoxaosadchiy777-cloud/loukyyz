@@ -11,9 +11,21 @@ response_format=json намеренно НЕ отправляется: част�
 
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from ai.providers.base import AIProvider, ProviderError
+
+
+def _decode(resp: httpx.Response) -> str:
+    """Тело ответа как UTF-8 без опоры на угаданную httpx кодировку.
+
+    httpx `.text` подбирает кодировку эвристикой и на коротких/смешанных телах
+    может ошибиться. Декодируем сырые байты как UTF-8 c errors="replace" — так
+    ответ модели (в т.ч. русский текст) не роняет обработку.
+    """
+    return resp.content.decode("utf-8", errors="replace")
 
 
 def _snippet(text: str, limit: int = 200) -> str:
@@ -82,8 +94,9 @@ class OpenAIChatProvider(AIProvider):
 
         self._raise_for_status(resp)
 
+        # Разбираем UTF-8-декодированное тело сами, не полагаясь на угадывание httpx.
         try:
-            data = resp.json()
+            data = json.loads(_decode(resp))
             text = data["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise ProviderError(self.name, f"неожиданный ответ API: {exc}") from exc
@@ -105,7 +118,7 @@ class OpenAIChatProvider(AIProvider):
             raise ProviderError(self.name, f"модель недоступна (404): {self._model}")
         if code == 429:
             raise ProviderError(self.name, "лимит/квота исчерпаны (429)")
-        raise ProviderError(self.name, f"HTTP {code}: {_snippet(resp.text)}")
+        raise ProviderError(self.name, f"HTTP {code}: {_snippet(_decode(resp))}")
 
     async def aclose(self) -> None:
         if self._client is not None:
