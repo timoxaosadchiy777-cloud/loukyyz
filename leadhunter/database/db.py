@@ -16,12 +16,21 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from core.models import CrmStatus, Order
+from core.user_settings import UserSettings
 
 log = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _pack(values: tuple[str, ...]) -> str:
+    return ",".join(values)
+
+
+def _unpack(raw: str | None) -> tuple[str, ...]:
+    return tuple(part for part in (raw or "").split(",") if part)
 
 # Таблица создаётся первой. Индексы — отдельно и ПОСЛЕ миграции колонок: на
 # старой БД колонки crm_status ещё нет, и индекс по ней нельзя создавать до ALTER.
@@ -59,11 +68,36 @@ CREATE TABLE IF NOT EXISTS users (
 );
 """
 
+# Персональные фильтры: по строке на пользователя. Списки хранятся строкой через
+# запятую — их всегда читают целиком, отдельные таблицы дали бы только JOIN'ы.
+_USER_SETTINGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_settings (
+    telegram_id INTEGER PRIMARY KEY,
+    sources     TEXT    NOT NULL DEFAULT '',
+    categories  TEXT    NOT NULL DEFAULT '',
+    keywords    TEXT    NOT NULL DEFAULT '',
+    min_budget  INTEGER NOT NULL DEFAULT 0,
+    onboarded   INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT    NOT NULL
+);
+"""
+
+# Избранные лиды пользователя (кнопка ⭐ под карточкой).
+_SAVED_LEADS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS saved_leads (
+    telegram_id INTEGER NOT NULL,
+    order_id    INTEGER NOT NULL,
+    created_at  TEXT    NOT NULL,
+    PRIMARY KEY (telegram_id, order_id)
+);
+"""
+
 _INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_orders_source_ext ON orders(source, external_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status     ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_crm        ON orders(crm_status);
 CREATE INDEX IF NOT EXISTS idx_users_paid        ON users(paid_status);
+CREATE INDEX IF NOT EXISTS idx_saved_user        ON saved_leads(telegram_id);
 """
 
 # Колонки, добавленные в LeadHunter 2.0. Для уже существующих БД (Alembic здесь
@@ -96,6 +130,8 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(_SCHEMA)
         await self._conn.executescript(_USERS_SCHEMA)  # появляется и на старых БД
+        await self._conn.executescript(_USER_SETTINGS_SCHEMA)
+        await self._conn.executescript(_SAVED_LEADS_SCHEMA)
         await self._migrate()  # добавляет недостающие колонки (в т.ч. crm_status)
         await self._conn.executescript(_INDEXES)  # индексы — уже по всем колонкам
         await self._conn.commit()
@@ -253,3 +289,106 @@ class Database:
         )
         row = await cur.fetchone()
         return (row["total"], row["paid"]) if row else (0, 0)
+
+    # ------------------------------------------------------------------
+    # Персональные фильтры
+    # ------------------------------------------------------------------
+
+    async def get_user_settings(self, telegram_id: int) -> UserSettings:
+        """Фильтры пользователя. Для незнакомого id — дефолтные (onboarded=False)."""
+        cur = await self._connection.execute(
+            "SELECT * FROM user_settings WHERE telegram_id = ?", (telegram_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return UserSettings()
+        return UserSettings(
+            sources=_unpack(row["sources"]),
+            categories=_unpack(row["categories"]),
+            keywords=_unpack(row["keywords"]),
+            min_budget=row["min_budget"],
+            onboarded=bool(row["onboarded"]),
+        )
+
+    async def save_user_settings(
+        self, telegram_id: int, settings: UserSettings
+    ) -> None:
+        await self._connection.execute(
+            """
+            INSERT INTO user_settings
+                (telegram_id, sources, categories, keywords, min_budget,
+                 onboarded, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                sources    = excluded.sources,
+                categories = excluded.categories,
+                keywords   = excluded.keywords,
+                min_budget = excluded.min_budget,
+                onboarded  = excluded.onboarded,
+                updated_at = excluded.updated_at
+            """,
+            (
+                telegram_id,
+                _pack(settings.sources),
+                _pack(settings.categories),
+                _pack(settings.keywords),
+                settings.min_budget,
+                int(settings.onboarded),
+                _utcnow_iso(),
+            ),
+        )
+        await self._connection.commit()
+
+    # ------------------------------------------------------------------
+    # Избранные лиды и подбор по фильтрам
+    # ------------------------------------------------------------------
+
+    async def save_lead(self, telegram_id: int, order_id: int) -> None:
+        await self._connection.execute(
+            "INSERT OR IGNORE INTO saved_leads (telegram_id, order_id, created_at)"
+            " VALUES (?, ?, ?)",
+            (telegram_id, order_id, _utcnow_iso()),
+        )
+        await self._connection.commit()
+
+    async def unsave_lead(self, telegram_id: int, order_id: int) -> None:
+        await self._connection.execute(
+            "DELETE FROM saved_leads WHERE telegram_id = ? AND order_id = ?",
+            (telegram_id, order_id),
+        )
+        await self._connection.commit()
+
+    async def is_lead_saved(self, telegram_id: int, order_id: int) -> bool:
+        cur = await self._connection.execute(
+            "SELECT 1 FROM saved_leads WHERE telegram_id = ? AND order_id = ? LIMIT 1",
+            (telegram_id, order_id),
+        )
+        return await cur.fetchone() is not None
+
+    async def list_saved_leads(
+        self, telegram_id: int, limit: int = 20
+    ) -> list[aiosqlite.Row]:
+        """Сохранённые лиды пользователя, свежие сверху."""
+        cur = await self._connection.execute(
+            """
+            SELECT o.* FROM saved_leads s
+            JOIN orders o ON o.id = s.order_id
+            WHERE s.telegram_id = ?
+            ORDER BY s.created_at DESC
+            LIMIT ?
+            """,
+            (telegram_id, limit),
+        )
+        return list(await cur.fetchall())
+
+    async def recent_orders(self, limit: int = 100) -> list[aiosqlite.Row]:
+        """Последние доставленные лиды — сырьё для «🔍 Проверить сейчас».
+
+        Отсеянные пайплайном (rejected/filtered) не возвращаем: пользователь
+        ждёт подходящие заказы, а не мусор.
+        """
+        cur = await self._connection.execute(
+            "SELECT * FROM orders WHERE status = 'new' ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return list(await cur.fetchall())
