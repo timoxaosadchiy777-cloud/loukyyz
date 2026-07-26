@@ -12,7 +12,7 @@ RSS-фиды (Upwork RSS, джоб-борды, …)
         ↓
 🤖 AI Lead Scoring  — модель оценивает заказ по смыслу и вашему profile.md
         ↓  score ≥ min_score и модель рекомендует → дальше
-✍️  AI генерирует отклик (OpenRouter / Groq / Ollama / Gemini — с fallback)
+✍️  AI генерирует отклик (локальный Ollama — бесплатно, без ключей)
         ↓
 📲 Telegram: карточка с AI Score, категорией, причиной, откликом
         ↓
@@ -32,8 +32,8 @@ RSS-фиды (Upwork RSS, джоб-борды, …)
 
 - **Python 3.11+** · **asyncio**
 - **feedparser** — чтение RSS/Atom-фидов (модульный список источников)
-- **Мульти-провайдерный AI-слой** (`ai/llm.py` + `ai/providers/`) — бесплатные
-  OpenRouter / Groq / Ollama с автоматическим fallback (Gemini — крайний вариант)
+- **Локальный AI через Ollama** (`ai/llm.py` + `ai/providers/`) — бесплатно, без
+  API-ключей; платные провайдеры опциональны (только если задан их ключ)
 - **httpx** — async HTTP-клиент для AI-провайдеров
 - **Aiogram 3.x** — доставка карточек, кнопка копирования и CRM-воронка
 - **SQLite** (aiosqlite) — дедупликация, история, AI-оценки, CRM-статусы
@@ -94,9 +94,12 @@ pip install -r requirements.txt
 
 # 2) Заполнить .env
 #    Windows: copy .env.example .env    |    Linux/Mac: cp .env.example .env
-#    Вписать BOT_TOKEN, OWNER_ID, GEMINI_API_KEY (и, при желании, FEEDS)
+#    Вписать BOT_TOKEN и OWNER_ID. AI-ключи НЕ нужны — ИИ работает локально.
 
-# 3) Отредактировать profile.md под себя (это важно — по нему оценивает ИИ)
+# 3) Поставить локальный ИИ (один раз): см. раздел «AI: локальный Ollama»
+#    ollama serve  &&  ollama pull llama3.1:8b
+
+# 4) Отредактировать profile.md под себя (это важно — по нему оценивает ИИ)
 
 # 4) Запустить (из каталога leadhunter/ ИЛИ из корня репозитория — без разницы)
 python main.py            # или:  python leadhunter/main.py
@@ -114,11 +117,6 @@ python main.py            # или:  python leadhunter/main.py
 |---|---|---|
 | `BOT_TOKEN` | токен бота-получателя | [@BotFather](https://t.me/BotFather) |
 | `OWNER_ID` | ваш Telegram id | [@userinfobot](https://t.me/userinfobot) |
-| `AI_PROVIDER` | основной AI-провайдер | `openrouter` (по умолчанию) |
-| `OPENROUTER_API_KEY` | ключ OpenRouter (бесплатный) | https://openrouter.ai/keys |
-| `OPENROUTER_MODEL` | модель OpenRouter | `deepseek/deepseek-chat:free` |
-| `GROQ_API_KEY` | ключ Groq (бесплатный, fallback) | https://console.groq.com/keys |
-| `GEMINI_API_KEY` | ключ Gemini (крайний fallback) | https://aistudio.google.com |
 | `FEEDS` | список RSS-фидов через запятую | по умолчанию — публичные джоб-борды |
 | `FEED_POLL_INTERVAL` | период опроса фидов, сек | по умолчанию `300` |
 | `PROFILE_PATH` | путь к профилю исполнителя | по умолчанию `profile.md` |
@@ -214,27 +212,55 @@ enabled_sources: [upwork, fiverr, rss]
 
 ---
 
-## 🧠 AI-провайдеры и fallback
+## 🧠 AI: локальный Ollama (бесплатно, без ключей)
 
-LeadHunter работает на **бесплатных** AI-провайдерах — платный Gemini больше не
-обязателен. Запросы идут через `LLMRouter` (`ai/llm.py`), который перебирает
-провайдеров по порядку и берёт первого, кто ответил:
+По умолчанию LeadHunter работает на **локальном Ollama** — никаких API-ключей,
+квот и платных сервисов. Провайдер задаётся в `settings.yaml`:
 
+```yaml
+llm:
+  provider: ollama
+  model: llama3.1:8b
+  base_url: http://localhost:11434
 ```
-OpenRouter (free) → Groq (free) → Ollama (local) → Gemini (последний вариант)
+
+**Установка (один раз):**
+
+```bash
+# 1) Установить Ollama: https://ollama.com/download
+#    Windows — скачать установщик; macOS: brew install ollama
+#    Linux:  curl -fsSL https://ollama.com/install.sh | sh
+
+# 2) Запустить сервер (Windows-приложение стартует само)
+ollama serve
+
+# 3) Скачать модель (~4.7 GB)
+ollama pull llama3.1:8b
+
+# 4) Проверить
+python check_ai.py        # ожидаем: Ollama → Status: OK
+python main.py
 ```
 
-Если провайдер не настроен, вернул ошибку, упёрся в лимит или у него нет
-модели — роутер автоматически переходит к следующему. Достаточно **одного**
-бесплатного ключа (обычно OpenRouter). Каждый провайдер — это класс в
-`ai/providers/` с методом `generate(prompt) -> str`:
+Слабый ПК? Возьмите модель полегче: `ollama pull llama3.2:3b` и укажите её в
+`settings.yaml`.
+
+**Fallback:** `Ollama → ручной режим`. Если Ollama не запущен, лид не теряется —
+карточка приходит с пометкой причины и без ИИ-текста, бот не падает и не зависает.
+Платные провайдеры (OpenRouter / Groq / Gemini) подключаются в хвост цепочки
+**только** если вы явно задали их ключ в `.env`; без ключей они не дёргаются вообще.
+
+**Экономия:** отклик генерируется только для лидов, прошедших `min_score`.
+Слабые лиды тратят один запрос (скоринг), а не два.
+
+Каждый провайдер — это класс в `ai/providers/` с методом `generate(prompt) -> str`:
 
 ```
 ai/providers/
   base.py         # контракт AIProvider + ProviderError
-  openrouter.py   # основной (бесплатные модели)
-  groq.py         # быстрый бесплатный fallback
-  ollama.py       # локальные модели (по умолчанию выключен)
+  openrouter.py   # опционально (только если задан ключ)
+  groq.py         # опционально (только если задан ключ)
+  ollama.py       # ОСНОВНОЙ: локальные модели, без ключей
   gemini.py       # крайний fallback
 ```
 

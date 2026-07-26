@@ -15,3 +15,11 @@ min_budget: 50
 # Активные источники лидов. Уберите ненужные; пустой список [] = все источники.
 # Возможные значения: upwork, fiverr, rss
 enabled_sources: [upwork, fiverr, rss]
+
+# LLM-провайдер. По умолчанию — локальный Ollama: бесплатно, без API-ключей.
+# Установка: https://ollama.com/download , затем `ollama pull llama3.1:8b`.
+# Полегче/побыстрее на слабом ПК: llama3.2:3b или qwen2.5:7b.
+llm:
+  provider: ollama
+  model: llama3.1:8b
+  base_url: http://localhost:11434

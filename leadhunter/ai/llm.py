@@ -23,11 +23,16 @@ from typing import Protocol, runtime_checkable
 # Только базовый контракт грузим сразу — он без внешних зависимостей.
 from ai.providers import AIProvider, ProviderError
 from config import Settings
+from core.runtime_config import LlmConfig
 
 log = logging.getLogger(__name__)
 
-# Канонический порядок fallback: OpenRouter → Groq → Ollama → Gemini.
-_ORDER = ("openrouter", "groq", "ollama", "gemini")
+# Провайдер по умолчанию — локальный Ollama (бесплатно, без ключей).
+# Платные провайдеры подключаются, только если их ключ явно задан в .env.
+_DEFAULT_PROVIDER = "ollama"
+
+# Порядок подключения платных провайдеров ПОСЛЕ основного (только при наличии ключа).
+_PAID_ORDER = ("openrouter", "groq", "gemini")
 
 # Провайдер → (модуль, класс). Импорт модуля ленивый (см. _instantiate).
 _PROVIDER_MODULES: dict[str, tuple[str, str]] = {
@@ -132,19 +137,32 @@ class LLMRouter:
                 pass
 
 
-def _provider_order(settings: Settings) -> list[str]:
-    """Порядок провайдеров: выбранный основной первым, затем канонический fallback."""
-    primary = (settings.ai_provider or "openrouter").strip().lower()
+def _provider_order(primary: str, settings: Settings) -> list[str]:
+    """Порядок провайдеров: основной (обычно локальный ollama) — первым.
+
+    Платные провайдеры добавляются в хвост ТОЛЬКО если их ключ явно задан в `.env`.
+    Без ключей цепочка состоит из одного локального провайдера, и при его недоступности
+    пайплайн сразу уходит в ручной режим, а не долбит платные API.
+    """
     order: list[str] = []
     if primary in _PROVIDER_MODULES:
         order.append(primary)
-    for name in _ORDER:
-        if name not in order:
+    else:
+        log.warning("Неизвестный llm.provider=%r — использую %s", primary, _DEFAULT_PROVIDER)
+        order.append(_DEFAULT_PROVIDER)
+
+    keys = {
+        "openrouter": settings.openrouter_api_key,
+        "groq": settings.groq_api_key,
+        "gemini": settings.gemini_api_key,
+    }
+    for name in _PAID_ORDER:
+        if name not in order and keys.get(name):
             order.append(name)
     return order
 
 
-def _instantiate(name: str, settings: Settings) -> AIProvider:
+def _instantiate(name: str, settings: Settings, llm_cfg: LlmConfig) -> AIProvider:
     """Лениво импортирует модуль провайдера и создаёт его экземпляр.
 
     Импорт именно здесь: пока провайдер не понадобился в цепочке, его зависимости
@@ -155,25 +173,26 @@ def _instantiate(name: str, settings: Settings) -> AIProvider:
     module = importlib.import_module(module_path)
     provider_cls = getattr(module, class_name)
 
+    if name == "ollama":
+        # Локальный провайдер конфигурируется из settings.yaml (llm:) и всегда
+        # включён, когда выбран основным — ключи не нужны.
+        return provider_cls(llm_cfg.base_url, llm_cfg.model, enabled=True)
     if name == "openrouter":
         return provider_cls(settings.openrouter_api_key, settings.openrouter_model)
     if name == "groq":
         return provider_cls(settings.groq_api_key, settings.groq_model)
-    if name == "ollama":
-        return provider_cls(
-            settings.ollama_host, settings.ollama_model, enabled=settings.ollama_enabled
-        )
     if name == "gemini":
         return provider_cls(settings.gemini_api_key, settings.gemini_model)
     raise KeyError(name)  # неизвестный провайдер — не должно случаться
 
 
-def _build_providers(settings: Settings) -> list[AIProvider]:
+def _build_providers(settings: Settings, llm_cfg: LlmConfig | None = None) -> list[AIProvider]:
     """Строит цепочку провайдеров, пропуская тех, чьи зависимости не установлены."""
+    cfg = llm_cfg or LlmConfig()
     providers: list[AIProvider] = []
-    for name in _provider_order(settings):
+    for name in _provider_order(cfg.provider, settings):
         try:
-            providers.append(_instantiate(name, settings))
+            providers.append(_instantiate(name, settings, cfg))
         except ImportError as exc:
             # Пакет провайдера не установлен (напр. нет google-genai для Gemini).
             # Не роняем запуск — просто пропускаем этот провайдер.
@@ -187,20 +206,24 @@ def _build_providers(settings: Settings) -> list[AIProvider]:
     return providers
 
 
-def create_llm(settings: Settings) -> LLMRouter:
+def create_llm(settings: Settings, llm_cfg: LlmConfig | None = None) -> LLMRouter:
     """Фабрика роутера LLM: строит цепочку провайдеров и логирует диагностику."""
-    router = LLMRouter(_build_providers(settings))
+    cfg = llm_cfg or LlmConfig()
+    router = LLMRouter(_build_providers(settings, cfg))
     available = [p.name for p in router._providers]
-    configured = router.configured_names()
     log.info(
-        "LLM роутер: доступны=[%s], настроены=[%s]",
-        ", ".join(available) or "НЕТ",
-        ", ".join(configured) or "НЕТ — задай ключ в .env",
+        "LLM: основной=%s (%s @ %s), цепочка=[%s]",
+        cfg.provider, cfg.model, cfg.base_url, ", ".join(available) or "НЕТ",
     )
-    if not configured:
+    if cfg.provider == "ollama":
+        log.info(
+            "LLM: локальный режим — API-ключи не нужны. Если Ollama не запущен, "
+            "выполни: ollama serve  и  ollama pull %s", cfg.model,
+        )
+    if not router.configured_names():
         log.error(
-            "AI ERROR: ни один провайдер не настроен. Впиши хотя бы один ключ в .env "
-            "(OPENROUTER_API_KEY / GROQ_API_KEY / GEMINI_API_KEY) или включи Ollama. "
-            "Проверка: python check_ai.py"
+            "AI ERROR: нет доступных AI-провайдеров. Запусти Ollama "
+            "(ollama serve + ollama pull %s) — лиды пока пойдут в ручной режим. "
+            "Проверка: python check_ai.py", cfg.model,
         )
     return router

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from core.runtime_config import RuntimeConfig, RuntimeConfigStore
+from core.runtime_config import LlmConfig, RuntimeConfig, RuntimeConfigStore
 
 
 def test_autocreate_and_defaults(tmp_path) -> None:
@@ -70,6 +70,34 @@ def test_broken_yaml_keeps_defaults(tmp_path) -> None:
     store = RuntimeConfigStore(path, defaults=RuntimeConfig())
     # Битый YAML → предыдущие/дефолтные значения, без падения.
     assert store.current().min_score == 60
+
+
+def test_llm_defaults_to_local_ollama(tmp_path) -> None:
+    path = tmp_path / "settings.yaml"
+    store = RuntimeConfigStore(path, defaults=RuntimeConfig())
+    llm = store.current().llm
+    assert llm.provider == "ollama"
+    assert llm.model == "llama3.1:8b"
+    assert llm.base_url == "http://localhost:11434"
+    # Блок llm: попадает и в автосозданный файл.
+    assert "llm:" in path.read_text(encoding="utf-8")
+
+
+def test_llm_block_parsed(tmp_path) -> None:
+    path = tmp_path / "settings.yaml"
+    path.write_text(
+        "llm:\n  provider: ollama\n  model: qwen2.5:7b\n  base_url: http://127.0.0.1:11434/\n",
+        encoding="utf-8",
+    )
+    llm = RuntimeConfigStore(path, defaults=RuntimeConfig()).current().llm
+    assert llm.model == "qwen2.5:7b"
+    assert llm.base_url == "http://127.0.0.1:11434"  # хвостовой слэш убран
+
+
+def test_llm_block_invalid_falls_back(tmp_path) -> None:
+    path = tmp_path / "settings.yaml"
+    path.write_text("llm: not-an-object\n", encoding="utf-8")
+    assert RuntimeConfigStore(path, defaults=RuntimeConfig()).current().llm == LlmConfig()
 
 
 def test_source_enabled_semantics() -> None:

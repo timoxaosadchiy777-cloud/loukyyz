@@ -22,6 +22,23 @@ log = logging.getLogger(__name__)
 # Известные источники лидов (для валидации enabled_sources).
 ALL_SOURCES: tuple[str, ...] = ("upwork", "fiverr", "rss")
 
+# Локальный, бесплатный провайдер по умолчанию — без ключей и платных API.
+_DEFAULT_LLM_PROVIDER = "ollama"
+_DEFAULT_LLM_MODEL = "llama3.1:8b"
+_DEFAULT_LLM_BASE_URL = "http://localhost:11434"
+
+
+@dataclass(frozen=True, slots=True)
+class LlmConfig:
+    """Настройки LLM-провайдера (правятся в settings.yaml, блок `llm:`).
+
+    По умолчанию — локальный Ollama: без API-ключей и платных сервисов.
+    """
+
+    provider: str = _DEFAULT_LLM_PROVIDER
+    model: str = _DEFAULT_LLM_MODEL
+    base_url: str = _DEFAULT_LLM_BASE_URL
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
@@ -33,11 +50,13 @@ class RuntimeConfig:
         min_budget: Дешёвый предварительный фильтр по бюджету (USD) — применяется
             ДО обращения к LLM, чтобы не тратить запросы на заведомо мелочь.
         enabled_sources: Активные источники. Пустой список = разрешены все.
+        llm: Настройки LLM-провайдера (по умолчанию локальный Ollama).
     """
 
     min_score: int = 60
     min_budget: int = 50
     enabled_sources: tuple[str, ...] = field(default_factory=lambda: ALL_SOURCES)
+    llm: LlmConfig = field(default_factory=LlmConfig)
 
     def source_enabled(self, source: str) -> bool:
         """Разрешён ли источник (пустой список источников = разрешены все)."""
@@ -61,6 +80,13 @@ min_budget: {min_budget}
 # Активные источники лидов. Уберите ненужные; пустой список [] = все источники.
 # Возможные значения: {all_sources}
 enabled_sources: [{sources}]
+
+# LLM-провайдер. По умолчанию — локальный Ollama: бесплатно, без API-ключей.
+# Установка: https://ollama.com/download , затем `ollama pull {llm_model}`.
+llm:
+  provider: {llm_provider}
+  model: {llm_model}
+  base_url: {llm_base_url}
 """
 
 
@@ -108,10 +134,12 @@ class RuntimeConfigStore:
         self._cached = self._build(data)
         self._mtime = mtime
         log.info(
-            "Настройки: min_score=%s, min_budget=%s, sources=%s",
+            "Настройки: min_score=%s, min_budget=%s, sources=%s, llm=%s/%s",
             self._cached.min_score,
             self._cached.min_budget,
             ",".join(self._cached.enabled_sources) or "все",
+            self._cached.llm.provider,
+            self._cached.llm.model,
         )
         return self._cached
 
@@ -121,6 +149,7 @@ class RuntimeConfigStore:
             min_score=_as_int(data.get("min_score"), d.min_score, low=0, high=100),
             min_budget=_as_int(data.get("min_budget"), d.min_budget, low=0),
             enabled_sources=_as_sources(data.get("enabled_sources"), d.enabled_sources),
+            llm=_as_llm(data.get("llm"), d.llm),
         )
 
     def _ensure_file(self) -> None:
@@ -132,6 +161,9 @@ class RuntimeConfigStore:
             min_budget=d.min_budget,
             all_sources=", ".join(ALL_SOURCES),
             sources=", ".join(d.enabled_sources),
+            llm_provider=d.llm.provider,
+            llm_model=d.llm.model,
+            llm_base_url=d.llm.base_url,
         )
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,6 +187,28 @@ def _as_int(value: object, default: int, *, low: int | None = None, high: int | 
     if high is not None and result > high:
         return high
     return result
+
+
+def _as_llm(value: object, default: LlmConfig) -> LlmConfig:
+    """Разбирает блок `llm:` из settings.yaml (мягко, с падением на дефолты)."""
+    if value is None:
+        return default
+    if not isinstance(value, dict):
+        log.warning("settings.yaml: блок 'llm' должен быть объектом — использую дефолты")
+        return default
+
+    def _text(key: str, fallback: str) -> str:
+        raw = value.get(key)
+        if raw is None:
+            return fallback
+        text = str(raw).strip()
+        return text or fallback
+
+    return LlmConfig(
+        provider=_text("provider", default.provider).lower(),
+        model=_text("model", default.model),
+        base_url=_text("base_url", default.base_url).rstrip("/"),
+    )
 
 
 def _as_sources(value: object, default: tuple[str, ...]) -> tuple[str, ...]:

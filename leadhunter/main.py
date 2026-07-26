@@ -107,7 +107,8 @@ async def handle_order(
         log.info("ИИ отклонил %s: %s", order.dedup_key, order.reason or order.category)
         await db.save_order(order, response="", status="rejected")
         return
-    if decision is None:
+    manual_mode = decision is None
+    if manual_mode:
         # ИИ недоступен/не разобрал ответ. Не теряем лид и не откатываемся к
         # ключевым словам: доставляем карточку, показывая РЕАЛЬНУЮ причину.
         reason = llm.last_error or "не удалось разобрать ответ ИИ"
@@ -118,15 +119,22 @@ async def handle_order(
             key="ai-scoring-failure",
         )
 
-    # 5. Response — генерация отклика через LLM (с учётом профиля и AI-анализа).
-    response = await responder.generate(order, analysis=lead_score)
-    if not response:
-        reason = llm.last_error or "неизвестная ошибка"
-        response = f"{_MANUAL_FALLBACK}\nПричина: {reason}"
-        await alerter.alert(
-            f"AI не сгенерировал отклик. Причина: {reason}. Проверь: python check_ai.py",
-            key="ai-response-failure",
+    # 5. Response — отклик генерируем ТОЛЬКО для прошедших порог лидов.
+    #    Экономия: слабые лиды и ручной режим не тратят второй запрос к модели.
+    if manual_mode:
+        response = (
+            f"{_MANUAL_FALLBACK}\nПричина: {llm.last_error or 'AI недоступен'}"
         )
+        log.info("Отклик не генерируется (ручной режим): %s", order.dedup_key)
+    else:
+        response = await responder.generate(order, analysis=lead_score)
+        if not response:
+            reason = llm.last_error or "неизвестная ошибка"
+            response = f"{_MANUAL_FALLBACK}\nПричина: {reason}"
+            await alerter.alert(
+                f"AI не сгенерировал отклик. Причина: {reason}. Проверь: python check_ai.py",
+                key="ai-response-failure",
+            )
 
     # 6. SQLite — сохранение с оценкой и статусом воронки NEW.
     order_id = await db.save_order(
@@ -195,7 +203,8 @@ async def main() -> None:
     config = RuntimeConfigStore(runtime_file, defaults=RuntimeConfig())
 
     profile = ProfileLoader(profile_file)
-    llm = create_llm(settings)
+    # Провайдер LLM берём из settings.yaml (блок llm:) — по умолчанию локальный Ollama.
+    llm = create_llm(settings, config.current().llm)
     scorer = ScoringService(llm, profile)
     responder = Responder(llm, settings, profile)
 

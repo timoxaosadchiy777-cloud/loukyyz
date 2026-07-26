@@ -23,7 +23,9 @@ class OllamaProvider(AIProvider):
         model: str,
         *,
         enabled: bool = False,
-        timeout: float = 120.0,
+        # Ограниченный таймаут: если локальный сервер завис, пайплайн не встаёт
+        # намертво — запрос обрывается и лид уходит в ручной режим.
+        timeout: float = 90.0,
     ) -> None:
         self._host = (host or "http://localhost:11434").rstrip("/")
         self._model = model

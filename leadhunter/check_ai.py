@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ai.llm import _build_providers  # noqa: E402
 from ai.providers.base import ProviderError  # noqa: E402
 from config import get_settings  # noqa: E402
+from core.runtime_config import RuntimeConfig, RuntimeConfigStore  # noqa: E402
 
 _TEST_PROMPT = "Reply with exactly one word: pong"
 
@@ -53,13 +54,18 @@ async def _probe(provider) -> tuple[bool, str]:
 
 async def main() -> int:
     settings = get_settings()
-    providers = _build_providers(settings)
+    # Провайдер и модель берём из settings.yaml (блок llm:) — как и сам бот.
+    llm_cfg = RuntimeConfigStore(
+        settings.runtime_config_file, defaults=RuntimeConfig()
+    ).current().llm
+    providers = _build_providers(settings, llm_cfg)
 
     print("=" * 40)
     print("LeadHunter AI Check")
     print("=" * 40)
-    print(f"\nОсновной (AI_PROVIDER): {_safe(settings.ai_provider)}")
-    print(f"Порядок fallback: {', '.join(p.name for p in providers)}")
+    print(f"\nОсновной провайдер (settings.yaml → llm.provider): {_safe(llm_cfg.provider)}")
+    print(f"Модель: {_safe(llm_cfg.model)} | base_url: {_safe(llm_cfg.base_url)}")
+    print(f"Цепочка: {', '.join(p.name for p in providers) or 'НЕТ'}")
 
     first_ok: str | None = None
     for provider in providers:
@@ -82,8 +88,10 @@ async def main() -> int:
         print("AI-слой рабочий: OK")
         return 0
     print("Текущий провайдер: НЕТ — ни один провайдер не ответил")
-    print("Впиши ключ в .env: OPENROUTER_API_KEY (или GROQ_API_KEY), "
-          "получить бесплатно: https://openrouter.ai/keys , https://console.groq.com/keys")
+    print("Локальный режим (бесплатно, без ключей):")
+    print("  1) установить Ollama: https://ollama.com/download")
+    print("  2) ollama serve")
+    print(f"  3) ollama pull {_safe(llm_cfg.model)}")
     return 1
 
 

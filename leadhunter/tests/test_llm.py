@@ -9,6 +9,7 @@ import httpx
 from ai.llm import LLMRouter, _build_providers, _combine
 from ai.providers.base import AIProvider, ProviderError
 from ai.providers.openrouter import OpenRouterProvider
+from core.runtime_config import LlmConfig
 
 
 class FakeProvider(AIProvider):
@@ -87,7 +88,8 @@ def test_combine_prompt() -> None:
 
 # --- Порядок провайдеров из настроек ---
 
-def _fake_settings(ai_provider="openrouter"):
+def _fake_settings(ai_provider="ollama"):
+    """Настройки без единого ключа — как у пользователя без платных API."""
     return SimpleNamespace(
         ai_provider=ai_provider,
         openrouter_api_key="", openrouter_model="m",
@@ -97,15 +99,30 @@ def _fake_settings(ai_provider="openrouter"):
     )
 
 
-def test_default_order_openrouter_first() -> None:
-    names = [p.name for p in _build_providers(_fake_settings("openrouter"))]
-    assert names == ["OpenRouter", "Groq", "Ollama", "Gemini"]
+def test_local_only_chain_without_keys() -> None:
+    """Без ключей цепочка — только локальный Ollama: платные API не дёргаются."""
+    names = [p.name for p in _build_providers(_fake_settings(), LlmConfig())]
+    assert names == ["Ollama"]
 
 
-def test_primary_provider_moves_first() -> None:
-    names = [p.name for p in _build_providers(_fake_settings("groq"))]
-    assert names[0] == "Groq"
-    assert set(names) == {"OpenRouter", "Groq", "Ollama", "Gemini"}
+def test_ollama_is_default_primary() -> None:
+    """Дефолтный провайдер — локальный Ollama с моделью из settings.yaml."""
+    cfg = LlmConfig()
+    assert cfg.provider == "ollama"
+    assert cfg.model == "llama3.1:8b"
+    assert cfg.base_url == "http://localhost:11434"
+    provider = _build_providers(_fake_settings(), cfg)[0]
+    assert provider.name == "Ollama"
+    assert provider.is_configured() is True  # ключи не нужны
+
+
+def test_paid_provider_appended_only_with_key() -> None:
+    """Платный провайдер попадает в хвост цепочки, только если задан его ключ."""
+    settings = _fake_settings()
+    settings.groq_api_key = "gk"
+    names = [p.name for p in _build_providers(settings, LlmConfig())]
+    assert names == ["Ollama", "Groq"]  # Ollama первый, Groq — резерв
+    assert "OpenRouter" not in names and "Gemini" not in names
 
 
 def test_missing_dependency_skips_provider(monkeypatch) -> None:
@@ -121,9 +138,11 @@ def test_missing_dependency_skips_provider(monkeypatch) -> None:
         return real_import(path)
 
     monkeypatch.setattr(llm_mod.importlib, "import_module", fake_import)
-    names = [p.name for p in _build_providers(_fake_settings("groq"))]
-    assert "Gemini" not in names          # пропущен из-за отсутствия зависимости
-    assert {"OpenRouter", "Groq", "Ollama"} <= set(names)  # остальные на месте
+    settings = _fake_settings()
+    settings.gemini_api_key = "gemkey"  # ключ есть, но пакет не установлен
+    names = [p.name for p in _build_providers(settings, LlmConfig())]
+    assert "Gemini" not in names   # пропущен из-за отсутствия зависимости
+    assert "Ollama" in names       # локальный провайдер на месте
 
 
 # --- HTTP-провайдер (OpenAI-совместимый) через мок-транспорт ---
