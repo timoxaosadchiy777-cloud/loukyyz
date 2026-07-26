@@ -30,9 +30,12 @@ from core.decision import apply_score, decide
 from core.filters import parse_budget
 from core.logging import setup_logging
 from core.models import CrmStatus, Order
+from core.profile import ProfileLoader
 from core.runtime_config import RuntimeConfig, RuntimeConfigStore
 from database.db import Database
-from parsers.rss_parser import RssParser
+
+# RssParser импортируется лениво в main(): он тянет feedparser, а держать
+# пайплайн (handle_order) импортируемым без этой зависимости удобно для тестов.
 
 log = logging.getLogger("leadhunter")
 
@@ -82,20 +85,22 @@ async def handle_order(
         await db.save_order(order, response="", status="filtered")
         return
 
-    # 3. AI Lead Scoring — оценка релевантности по смыслу и profile.md.
-    log.info("Новый заказ %s — оцениваю через ИИ", order.dedup_key)
+    # 3. AI Lead Scoring — оценка релевантности по смыслу, profile.md, бюджету.
+    log.info("AI scoring lead %s", order.external_id)
     lead_score = await scorer.score(order)
     apply_score(order, lead_score)
 
     # 4. Decision — пускать ли заказ дальше.
     decision = decide(lead_score, min_score=cfg.min_score)
+    decision_label = "send" if decision else ("reject" if decision is False else "manual")
+    # Явные, читаемые логи скоринга (именно AI scoring, а не «генерирую отклик»).
+    log.info("score=%s", "n/a" if order.score is None else order.score)
+    log.info("category=%s", order.category or "n/a")
+    log.info("probability_of_sale=%s", "n/a" if order.probability_of_sale is None else order.probability_of_sale)
+    log.info("decision=%s", decision_label)
+
     if decision is False:
-        log.info(
-            "ИИ отклонил %s (score=%s, %s)",
-            order.dedup_key,
-            order.score,
-            order.category or order.reason,
-        )
+        log.info("ИИ отклонил %s: %s", order.dedup_key, order.reason or order.category)
         await db.save_order(order, response="", status="rejected")
         return
     if decision is None:
@@ -107,8 +112,8 @@ async def handle_order(
             key="ai-scoring-failure",
         )
 
-    # 5. Response — генерация отклика через LLM.
-    response = await responder.generate(order)
+    # 5. Response — генерация отклика через LLM (с учётом профиля и AI-анализа).
+    response = await responder.generate(order, analysis=lead_score)
     if not response:
         response = _MANUAL_FALLBACK
         await alerter.alert(
@@ -165,22 +170,33 @@ async def process_orders(
 async def main() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
-    log.info("Запуск LeadHunter…")
+    log.info("Запуск LeadHunter 2.0…")
 
-    db = Database(settings.database_path)
+    # Пути резолвим от каталога проекта — работает из любого рабочего каталога.
+    profile_file = settings.profile_file
+    runtime_file = settings.runtime_config_file
+    db_file = settings.database_file
+    log.info("Профиль:   %s (%s)", profile_file, "найден" if profile_file.exists() else "НЕ найден")
+    log.info("Настройки: %s", runtime_file)
+    log.info("База:      %s", db_file)
+
+    db = Database(str(db_file))
     await db.connect()
 
-    config = RuntimeConfigStore(
-        settings.runtime_config_path, defaults=RuntimeConfig()
-    )
+    config = RuntimeConfigStore(runtime_file, defaults=RuntimeConfig())
 
+    profile = ProfileLoader(profile_file)
     llm = create_llm(settings)
-    scorer = ScoringService(llm, profile_path=settings.profile_path)
-    responder = Responder(llm, settings)
+    scorer = ScoringService(llm, profile)
+    responder = Responder(llm, settings, profile)
 
     bot = create_bot(settings)
     dp = create_dispatcher(db, settings)
     alerter = Alerter(bot, settings.owner_id, settings.alert_cooldown)
+
+    # Ленивый импорт: feedparser нужен только для реального запуска парсера,
+    # поэтому держим его здесь — модуль main остаётся импортируемым без feedparser.
+    from parsers.rss_parser import RssParser
 
     queue: "asyncio.Queue[Order]" = asyncio.Queue()
     rss = RssParser(queue, settings, alerter)

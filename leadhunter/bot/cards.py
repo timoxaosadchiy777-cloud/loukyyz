@@ -1,7 +1,7 @@
 """Форматирование карточек заказов (HTML для Telegram).
 
-Карточка показывает AI Score, категорию, причину и вероятность соответствия,
-статус воронки (CRM) и готовый отклик.
+Карточка показывает название, бюджет, AI Score, категорию, причину («Почему
+подходит»), вероятность сделки, статус воронки (CRM) и готовый отклик.
 """
 
 from __future__ import annotations
@@ -35,28 +35,28 @@ def _score_emoji(score: int) -> str:
     return "🔴"
 
 
-def _score_lines(order: Order) -> list[str]:
-    """Блок AI-оценки: score, вероятность, категория, причина."""
+def _score_block(order: Order) -> list[str]:
+    """Блок AI-оценки: score, категория, причина, вероятность сделки."""
     if order.score is None:
         lines = ["🤖 <b>AI Score:</b> н/д — оцените вручную"]
         if order.reason:
-            lines.append(f"💬 {escape(order.reason)}")
+            lines.append(f"📊 Почему: {escape(order.reason)}")
         return lines
 
     lines = [
-        f"{_score_emoji(order.score)} <b>AI Score:</b> {order.score}/100 "
-        f"(вероятность {order.score}%)",
+        f"{_score_emoji(order.score)} <b>AI Score:</b> {order.score}/100",
+        f"🗂 Категория: {escape(order.category or '—')}",
     ]
-    if order.category:
-        lines.append(f"🗂 Категория: {escape(order.category)}")
     if order.reason:
-        lines.append(f"💬 {escape(order.reason)}")
+        lines.append(f"📊 Почему подходит: {escape(order.reason)}")
+    if order.probability_of_sale is not None:
+        lines.append(f"📈 Вероятность сделки: {order.probability_of_sale}%")
     return lines
 
 
 def _crm_line(crm_status: str) -> str:
     label = CRM_LABELS.get(crm_status, CRM_LABELS[CrmStatus.NEW])
-    return f"📌 Статус: <b>{escape(label)}</b>"
+    return f"📌 CRM-статус: <b>{escape(label)}</b>"
 
 
 def render_card(order: Order, response: str) -> str:
@@ -68,11 +68,11 @@ def render_card(order: Order, response: str) -> str:
         f"🎯 <b>{escape(order.title)}</b>",
         f"<i>Источник: {escape(source)}</i>",
         _DIVIDER,
-        *_score_lines(order),
-        _DIVIDER,
         f"💰 Бюджет:  <code>{escape(budget)}</code>",
-        f"🔗 Ссылка:  <code>{escape(order.url)}</code>",
+        *_score_block(order),
         _crm_line(order.crm_status),
+        _DIVIDER,
+        f"🔗 Ссылка:  <code>{escape(order.url)}</code>",
         _DIVIDER,
         "✍️ <b>Отклик:</b>",
         f"<blockquote>{escape(response)}</blockquote>",

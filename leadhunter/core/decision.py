@@ -15,6 +15,7 @@ def apply_score(order: Order, lead_score: LeadScore) -> None:
     order.score = lead_score.score
     order.category = lead_score.category
     order.reason = lead_score.reason
+    order.probability_of_sale = lead_score.probability_of_sale
     order.should_send = lead_score.should_send
 
 

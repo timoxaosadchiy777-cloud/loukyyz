@@ -96,10 +96,12 @@ pip install -r requirements.txt
 
 # 3) Отредактировать profile.md под себя (это важно — по нему оценивает ИИ)
 
-# 4) Запустить
-python main.py
+# 4) Запустить (из каталога leadhunter/ ИЛИ из корня репозитория — без разницы)
+python main.py            # или:  python leadhunter/main.py
 ```
 
+Пути к `profile.md`, `settings.yaml` и базе резолвятся относительно каталога
+проекта, а не текущего рабочего каталога, — запуск из любого места находит файлы.
 При первом запуске рядом появится `settings.yaml` со значениями по умолчанию —
 его можно править на ходу (см. ниже). Подходящие заказы приходят карточками в бот
 с AI Score и готовым откликом.
@@ -111,7 +113,8 @@ python main.py
 | `BOT_TOKEN` | токен бота-получателя | [@BotFather](https://t.me/BotFather) |
 | `OWNER_ID` | ваш Telegram id | [@userinfobot](https://t.me/userinfobot) |
 | `GEMINI_API_KEY` | ключ Google Gemini (бесплатный) | https://aistudio.google.com |
-| `GEMINI_MODEL` | модель Gemini | по умолчанию `gemini-1.5-flash` |
+| `GEMINI_MODEL` | модель Gemini | по умолчанию `gemini-2.0-flash` |
+| `GEMINI_FALLBACK_MODEL` | резервная модель (404/квота) | по умолчанию `gemini-2.5-flash` |
 | `FEEDS` | список RSS-фидов через запятую | по умолчанию — публичные джоб-борды |
 | `FEED_POLL_INTERVAL` | период опроса фидов, сек | по умолчанию `300` |
 | `PROFILE_PATH` | путь к профилю исполнителя | по умолчанию `profile.md` |
@@ -126,13 +129,17 @@ python main.py
 возвращает строгий JSON:
 
 ```json
-{"score": 93, "category": "Telegram Bot", "reason": "Прямо по специализации", "should_send": true}
+{"score": 93, "category": "Telegram Bot", "reason": "Прямо по специализации", "probability_of_sale": 70, "should_send": true}
 ```
 
 - **score** — насколько заказ подходит именно вам (0..100), по смыслу.
 - **category** — категория заказа («Telegram Bot», «Парсинг», «Дизайн», …).
 - **reason** — короткое обоснование оценки.
+- **probability_of_sale** — вероятность довести заказ до сделки (0..100).
 - **should_send** — рекомендация показывать ли заказ.
+
+Оценка учитывает описание заказа, `profile.md`, бюджет и тип клиента. В логах
+виден весь ход: `AI scoring lead …`, `score=…`, `category=…`, `decision=send`.
 
 **Решение о доставке:** заказ проходит, если модель рекомендует его
 (`should_send = true`) и `score ≥ min_score`. Явный веток (`should_send = false`)

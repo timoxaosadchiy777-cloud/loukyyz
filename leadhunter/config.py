@@ -7,14 +7,27 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+# Корень проекта = каталог с этим файлом. Относительные пути (profile.md,
+# settings.yaml, leadhunter.db) резолвим ОТНОСИТЕЛЬНО него, а не текущего рабочего
+# каталога — иначе запуск `python leadhunter/main.py` из корня репозитория не
+# находит profile.md/settings.yaml (симптом «файл не найден»).
+BASE_DIR = Path(__file__).resolve().parent
+
 # Списки читаем из CSV-строк окружения (`a, b, c`), а не из JSON — так удобнее
 # заполнять `.env` вручную. NoDecode отключает попытку pydantic распарсить JSON.
 CsvList = Annotated[list[str], NoDecode]
+
+
+def resolve_path(path: str) -> Path:
+    """Возвращает абсолютный путь: как есть, если абсолютный, иначе от BASE_DIR."""
+    candidate = Path(path).expanduser()
+    return candidate if candidate.is_absolute() else BASE_DIR / candidate
 
 
 class Settings(BaseSettings):
@@ -31,9 +44,14 @@ class Settings(BaseSettings):
     bot_token: str = Field("", alias="BOT_TOKEN")
     owner_id: int = Field(0, alias="OWNER_ID")
 
-    # --- Google Gemini (генерация откликов) ---
+    # --- Google Gemini (генерация откликов и скоринг) ---
     gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
-    gemini_model: str = Field("gemini-1.5-flash", alias="GEMINI_MODEL")
+    # gemini-1.5-flash выведён из обслуживания и отдаёт 404 — по умолчанию берём
+    # актуальную модель. Меняется через .env без правки кода.
+    gemini_model: str = Field("gemini-2.0-flash", alias="GEMINI_MODEL")
+    # Резервная модель: используется, если основная недоступна (404) или её квота
+    # исчерпана (429). Тоже настраивается через .env.
+    gemini_fallback_model: str = Field("gemini-2.5-flash", alias="GEMINI_FALLBACK_MODEL")
     gemini_max_tokens: int = Field(1024, alias="GEMINI_MAX_TOKENS")
     gemini_temperature: float = Field(0.7, alias="GEMINI_TEMPERATURE")
 
@@ -76,6 +94,19 @@ class Settings(BaseSettings):
     @property
     def gemini_ready(self) -> bool:
         return bool(self.gemini_api_key)
+
+    # Абсолютные пути — устойчивы к текущему рабочему каталогу.
+    @property
+    def profile_file(self) -> Path:
+        return resolve_path(self.profile_path)
+
+    @property
+    def runtime_config_file(self) -> Path:
+        return resolve_path(self.runtime_config_path)
+
+    @property
+    def database_file(self) -> Path:
+        return resolve_path(self.database_path)
 
 
 @lru_cache

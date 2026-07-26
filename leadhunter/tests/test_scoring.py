@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from ai.scoring import LeadScore, ScoringService, _parse_score
 from core.models import Order
+from core.profile import ProfileLoader
+
+
+def _service(reply):
+    return ScoringService(_FakeLLM(reply), ProfileLoader("does-not-exist.md"))
 
 
 def _order() -> Order:
@@ -32,13 +37,23 @@ class _FakeLLM:
 
 
 def test_parse_clean_json() -> None:
-    score = _parse_score('{"score": 93, "category": "Telegram Bot", "reason": "по профилю", "should_send": true}')
+    score = _parse_score(
+        '{"score": 93, "category": "Telegram Bot", "reason": "по профилю",'
+        ' "probability_of_sale": 70, "should_send": true}'
+    )
     assert score is not None
     assert score.score == 93
     assert score.category == "Telegram Bot"
     assert score.reason == "по профилю"
+    assert score.probability_of_sale == 70
     assert score.should_send is True
     assert score.available is True
+
+
+def test_probability_defaults_to_score_when_missing() -> None:
+    score = _parse_score('{"score": 88, "category": "x", "reason": "y", "should_send": true}')
+    assert score is not None
+    assert score.probability_of_sale == 88  # нет поля → приближаем через score
 
 
 def test_parse_fenced_json() -> None:
@@ -79,23 +94,26 @@ def test_parse_invalid() -> None:
 
 
 async def test_service_returns_leadscore() -> None:
-    llm = _FakeLLM('{"score": 90, "category": "Парсинг", "reason": "по профилю", "should_send": true}')
-    service = ScoringService(llm, profile_path="does-not-exist.md")
+    service = _service(
+        '{"score": 90, "category": "Парсинг", "reason": "по профилю",'
+        ' "probability_of_sale": 65, "should_send": true}'
+    )
     score = await service.score(_order())
     assert score.available is True
     assert score.score == 90
-    assert llm.json_mode is True  # скоринг просит строгий JSON
+    assert score.probability_of_sale == 65
+    assert service._llm.json_mode is True  # скоринг просит строгий JSON
 
 
 async def test_service_unknown_when_llm_unavailable() -> None:
-    service = ScoringService(_FakeLLM(None), profile_path="does-not-exist.md")
+    service = _service(None)
     score = await service.score(_order())
     assert score.available is False
     assert score.score is None
 
 
 async def test_service_unknown_on_garbage() -> None:
-    service = ScoringService(_FakeLLM("совсем не json"), profile_path="does-not-exist.md")
+    service = _service("совсем не json")
     score = await service.score(_order())
     assert score.available is False
 

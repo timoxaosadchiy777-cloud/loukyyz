@@ -65,6 +65,7 @@ class Order:
     score: int | None = None
     category: str = ""
     reason: str = ""
+    probability_of_sale: int | None = None
     should_send: bool | None = None
     # --- CRM ---
     crm_status: str = CrmStatus.NEW
@@ -93,6 +94,7 @@ class Order:
             score=row["score"],
             category=row["category"] or "",
             reason=row["reason"] or "",
+            probability_of_sale=row["probability_of_sale"],
             should_send=None if should_send is None else bool(should_send),
             crm_status=row["crm_status"] or CrmStatus.NEW,
         )

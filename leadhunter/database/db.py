@@ -29,13 +29,14 @@ CREATE TABLE IF NOT EXISTS orders (
     budget_raw    TEXT,
     budget_value  INTEGER,
     response      TEXT,
-    status        TEXT    NOT NULL DEFAULT 'new',
-    score         INTEGER,
-    category      TEXT    NOT NULL DEFAULT '',
-    reason        TEXT    NOT NULL DEFAULT '',
-    should_send   INTEGER,
-    crm_status    TEXT    NOT NULL DEFAULT 'new',
-    created_at    TEXT    NOT NULL,
+    status              TEXT    NOT NULL DEFAULT 'new',
+    score               INTEGER,
+    category            TEXT    NOT NULL DEFAULT '',
+    reason              TEXT    NOT NULL DEFAULT '',
+    probability_of_sale INTEGER,
+    should_send         INTEGER,
+    crm_status          TEXT    NOT NULL DEFAULT 'new',
+    created_at          TEXT    NOT NULL,
     UNIQUE(source, external_id)
 );
 """
@@ -52,6 +53,7 @@ _MIGRATIONS: dict[str, str] = {
     "score": "INTEGER",
     "category": "TEXT NOT NULL DEFAULT ''",
     "reason": "TEXT NOT NULL DEFAULT ''",
+    "probability_of_sale": "INTEGER",
     "should_send": "INTEGER",
     "crm_status": "TEXT NOT NULL DEFAULT 'new'",
 }
@@ -118,8 +120,9 @@ class Database:
             INSERT OR IGNORE INTO orders
                 (source, external_id, title, url, description,
                  budget_raw, budget_value, response, status,
-                 score, category, reason, should_send, crm_status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 score, category, reason, probability_of_sale,
+                 should_send, crm_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 order.source,
@@ -134,6 +137,7 @@ class Database:
                 order.score,
                 order.category,
                 order.reason,
+                order.probability_of_sale,
                 should_send,
                 crm_status,
                 order.created_at.isoformat(),

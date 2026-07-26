@@ -31,6 +31,7 @@ def _scored_order() -> Order:
         score=93,
         category="Telegram Bot",
         reason="полностью по профилю",
+        probability_of_sale=72,
         should_send=True,
     )
 
@@ -43,6 +44,7 @@ async def test_save_and_read_roundtrip(db) -> None:
     assert row["score"] == 93
     assert row["category"] == "Telegram Bot"
     assert row["reason"] == "полностью по профилю"
+    assert row["probability_of_sale"] == 72
     assert row["should_send"] == 1
     assert row["crm_status"] == CrmStatus.NEW
     assert row["response"] == "proposal"
@@ -50,6 +52,7 @@ async def test_save_and_read_roundtrip(db) -> None:
     restored = Order.from_row(row)
     assert restored.score == 93
     assert restored.category == "Telegram Bot"
+    assert restored.probability_of_sale == 72
     assert restored.should_send is True
     assert restored.crm_status == CrmStatus.NEW
 
@@ -112,7 +115,9 @@ async def test_migration_adds_columns_to_legacy_db(tmp_path) -> None:
         # Новые колонки появились; старая запись цела и получила дефолты.
         cur = await database._connection.execute("PRAGMA table_info(orders)")
         cols = {r["name"] for r in await cur.fetchall()}
-        assert {"score", "category", "reason", "should_send", "crm_status"} <= cols
+        assert {
+            "score", "category", "reason", "probability_of_sale", "should_send", "crm_status"
+        } <= cols
 
         cur = await database._connection.execute(
             "SELECT crm_status, score FROM orders WHERE external_id='old'"

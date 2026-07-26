@@ -3,11 +3,18 @@
 Заменяет фильтрацию по ключевым словам. По каждому новому заказу модель получает
 профиль исполнителя (`profile.md`) и текст заказа и возвращает строгий JSON::
 
-    {"score": 93, "category": "Telegram Bot", "reason": "...", "should_send": true}
+    {
+      "score": 93,
+      "category": "Telegram Bot",
+      "reason": "...",
+      "probability_of_sale": 70,
+      "should_send": true
+    }
 
 Оценка — это семантическое суждение «насколько заказ подходит именно этому
 исполнителю», а не совпадение слов. Никаких стоп-слов, whitelist/blacklist:
-решение о релевантности принимает LLM по смыслу заказа и содержимому профиля.
+решение о релевантности принимает LLM по смыслу заказа, бюджету, типу клиента и
+содержимому профиля.
 
 При недоступности модели или неразборчивом ответе возвращается «неизвестно»
 (:meth:`LeadScore.unknown`) — вызывающий код решает, что делать (LeadHunter не
@@ -20,10 +27,10 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 from ai.llm import LLMClient
 from core.models import Order
+from core.profile import ProfileLoader
 
 log = logging.getLogger(__name__)
 
@@ -38,27 +45,37 @@ _SCORING_INSTRUCTIONS = """\
 Твоя задача — понять СМЫСЛ заказа и решить, насколько он подходит исполнителю,
 профиль которого дан ниже. Оценивай по смыслу, а не по совпадению слов.
 
+Учитывай в оценке:
+- описание заказа (что именно нужно сделать);
+- профиль исполнителя (навыки, специализация, желательные/нежелательные проекты);
+- бюджет заказа (насколько адекватен);
+- тип клиента (серьёзный проект / мелочь / неоплачиваемое).
+
 Верни СТРОГО один JSON-объект без пояснений, markdown и текста вокруг:
 {
   "score": <целое 0..100 — насколько заказ подходит исполнителю>,
-  "category": "<короткая категория заказа, напр. 'Telegram Bot', 'Парсинг', 'Дизайн'>",
+  "category": "<короткая категория, напр. 'Telegram Bot', 'Парсинг', 'Дизайн'>",
   "reason": "<1-2 предложения: почему такая оценка, по-русски>",
+  "probability_of_sale": <целое 0..100 — вероятность довести заказ до сделки>,
   "should_send": <true|false — стоит ли показывать заказ исполнителю>
 }
 
 Как выставлять score (ориентиры калибровки):
 - «Нужен Telegram бот» → ~95
+- «Python automation» → ~90
+- «Парсер / сбор данных» → ~90
 - «Автоматизация Excel / отчётности» → ~80
-- «Парсер Avito / сбор данных» → ~90
 - «Нарисовать логотип» → ~5
 - «SEO-продвижение сайта» → ~3
 Чем ближе суть заказа к специализации и желательным проектам из профиля — тем
 выше. Чем ближе к нежелательным — тем ниже. Если заказ явно не по профилю,
 ставь низкий score и should_send=false.
 
+probability_of_sale — оценка шанса, что исполнитель реально получит этот заказ
+(с учётом бюджета, конкуренции, ясности ТЗ), а не то же самое, что score.
+
 should_send — твоя рекомендация: true, если заказ стоит внимания исполнителя,
-false — если это явно не его профиль. Порог по числу применит система отдельно,
-твоя задача — честная оценка смысла.
+false — если это явно не его профиль. Порог по числу применит система отдельно.
 """
 
 
@@ -70,12 +87,14 @@ class LeadScore:
         score: Оценка соответствия 0..100, либо ``None`` — если ИИ недоступен.
         category: Категория заказа по мнению модели.
         reason: Короткое обоснование оценки.
+        probability_of_sale: Вероятность довести заказ до сделки, 0..100 (или None).
         should_send: Рекомендация модели показывать ли заказ, либо ``None``.
     """
 
     score: int | None
     category: str
     reason: str
+    probability_of_sale: int | None
     should_send: bool | None
 
     @property
@@ -85,15 +104,21 @@ class LeadScore:
 
     @classmethod
     def unknown(cls, reason: str = "ИИ недоступен — оцените вручную") -> LeadScore:
-        return cls(score=None, category="", reason=reason, should_send=None)
+        return cls(
+            score=None,
+            category="",
+            reason=reason,
+            probability_of_sale=None,
+            should_send=None,
+        )
 
 
 class ScoringService:
     """Оценивает заказы через LLM с учётом профиля исполнителя из `profile.md`."""
 
-    def __init__(self, llm: LLMClient, *, profile_path: str | Path) -> None:
+    def __init__(self, llm: LLMClient, profile: ProfileLoader) -> None:
         self._llm = llm
-        self._profile = _ProfileText(Path(profile_path))
+        self._profile = profile
 
     async def score(self, order: Order) -> LeadScore:
         """Возвращает :class:`LeadScore` для заказа (или ``unknown()`` при сбое)."""
@@ -138,35 +163,6 @@ class ScoringService:
         )
 
 
-class _ProfileText:
-    """Ленивое чтение `profile.md` с горячей перезагрузкой по mtime."""
-
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._cache = ""
-        self._mtime: float | None = None
-        self._warned_missing = False
-
-    def read(self) -> str:
-        try:
-            mtime = self._path.stat().st_mtime
-        except OSError:
-            if not self._warned_missing:
-                log.warning("Файл профиля %s не найден — скоринг без профиля", self._path)
-                self._warned_missing = True
-            return self._cache
-
-        if mtime != self._mtime:
-            try:
-                self._cache = self._path.read_text(encoding="utf-8").strip()
-                self._mtime = mtime
-                self._warned_missing = False
-                log.info("Профиль загружен: %s (%s символов)", self._path, len(self._cache))
-            except OSError as exc:
-                log.warning("Не удалось прочитать профиль %s: %s", self._path, exc)
-        return self._cache
-
-
 # --- Разбор ответа модели ---
 
 def _parse_score(text: str) -> LeadScore | None:
@@ -181,21 +177,39 @@ def _parse_score(text: str) -> LeadScore | None:
     if not isinstance(data, dict):
         return None
 
-    try:
-        score = int(round(float(data.get("score"))))
-    except (TypeError, ValueError):
-        return None
-    score = max(0, min(100, score))
+    score = _as_pct(data.get("score"))
+    if score is None:
+        return None  # score обязателен
 
     category = str(data.get("category") or "").strip()[:80] or "—"
     reason = str(data.get("reason") or "").strip()
+
+    # Вероятность сделки: если модель не вернула — берём score как приближение.
+    probability = _as_pct(data.get("probability_of_sale"))
+    if probability is None:
+        probability = score
 
     should_send = _coerce_bool(data.get("should_send"))
     if should_send is None:
         # Модель не вернула флаг — используем оценку как запасной вывод.
         should_send = score >= 50
 
-    return LeadScore(score=score, category=category, reason=reason, should_send=should_send)
+    return LeadScore(
+        score=score,
+        category=category,
+        reason=reason,
+        probability_of_sale=probability,
+        should_send=should_send,
+    )
+
+
+def _as_pct(value: object) -> int | None:
+    """Приводит значение к целому проценту 0..100 или ``None``."""
+    try:
+        result = int(round(float(value)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(100, result))
 
 
 def _coerce_bool(value: object) -> bool | None:
