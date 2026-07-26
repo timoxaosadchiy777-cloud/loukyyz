@@ -1,32 +1,41 @@
 """Слой LLM: маршрутизация между AI-провайдерами с fallback.
 
-LeadHunter больше не привязан к одному платному API. :class:`LLMRouter` перебирает
-провайдеров по порядку (OpenRouter → Groq → Ollama → Gemini) и берёт первый, кто
+LeadHunter не привязан к одному платному API. :class:`LLMRouter` перебирает
+провайдеров по порядку (OpenRouter → Groq → Ollama → Gemini) и берёт первого, кто
 ответил. Если провайдер не настроен, отдал ошибку, упёрся в лимит или у него нет
 модели — роутер автоматически переходит к следующему.
 
+Важно (архитектура): провайдеры импортируются ЛЕНИВО, каждый в момент сборки
+цепочки. У каждого свои зависимости (например, Gemini тянет `google-genai`), и
+если пакет провайдера не установлен — этот провайдер просто пропускается, а не
+роняет запуск всего приложения. Так Groq работает без установленного Gemini.
+
 Скоринг (:mod:`ai.scoring`) и генерация откликов (:mod:`ai.responder`) обращаются
 к роутеру через тот же метод ``complete(...)``, что и раньше, — их код не менялся.
-Провайдеры принимают единый текстовый промпт (`generate(prompt) -> str`), поэтому
-роутер склеивает system+user в один промпт.
 """
 
 from __future__ import annotations
 
+import importlib
 import logging
 from typing import Protocol, runtime_checkable
 
+# Только базовый контракт грузим сразу — он без внешних зависимостей.
 from ai.providers import AIProvider, ProviderError
-from ai.providers.gemini import GeminiProvider
-from ai.providers.groq import GroqProvider
-from ai.providers.ollama import OllamaProvider
-from ai.providers.openrouter import OpenRouterProvider
 from config import Settings
 
 log = logging.getLogger(__name__)
 
-# Канонический порядок fallback (item: OpenRouter → Groq → Ollama → Gemini).
+# Канонический порядок fallback: OpenRouter → Groq → Ollama → Gemini.
 _ORDER = ("openrouter", "groq", "ollama", "gemini")
+
+# Провайдер → (модуль, класс). Импорт модуля ленивый (см. _instantiate).
+_PROVIDER_MODULES: dict[str, tuple[str, str]] = {
+    "openrouter": ("ai.providers.openrouter", "OpenRouterProvider"),
+    "groq": ("ai.providers.groq", "GroqProvider"),
+    "ollama": ("ai.providers.ollama", "OllamaProvider"),
+    "gemini": ("ai.providers.gemini", "GeminiProvider"),
+}
 
 
 @runtime_checkable
@@ -123,33 +132,69 @@ class LLMRouter:
                 pass
 
 
-def _build_providers(settings: Settings) -> list[AIProvider]:
-    """Создаёт провайдеров и упорядочивает: выбранный основной — первым."""
-    catalog: dict[str, AIProvider] = {
-        "openrouter": OpenRouterProvider(settings.openrouter_api_key, settings.openrouter_model),
-        "groq": GroqProvider(settings.groq_api_key, settings.groq_model),
-        "ollama": OllamaProvider(
-            settings.ollama_host, settings.ollama_model, enabled=settings.ollama_enabled
-        ),
-        "gemini": GeminiProvider(settings.gemini_api_key, settings.gemini_model),
-    }
+def _provider_order(settings: Settings) -> list[str]:
+    """Порядок провайдеров: выбранный основной первым, затем канонический fallback."""
     primary = (settings.ai_provider or "openrouter").strip().lower()
     order: list[str] = []
-    if primary in catalog:
+    if primary in _PROVIDER_MODULES:
         order.append(primary)
     for name in _ORDER:
         if name not in order:
             order.append(name)
-    return [catalog[name] for name in order]
+    return order
+
+
+def _instantiate(name: str, settings: Settings) -> AIProvider:
+    """Лениво импортирует модуль провайдера и создаёт его экземпляр.
+
+    Импорт именно здесь: пока провайдер не понадобился в цепочке, его зависимости
+    (например, google-genai для Gemini) не требуются. ``ImportError`` пробрасывается
+    наверх — :func:`_build_providers` решает пропустить такой провайдер.
+    """
+    module_path, class_name = _PROVIDER_MODULES[name]
+    module = importlib.import_module(module_path)
+    provider_cls = getattr(module, class_name)
+
+    if name == "openrouter":
+        return provider_cls(settings.openrouter_api_key, settings.openrouter_model)
+    if name == "groq":
+        return provider_cls(settings.groq_api_key, settings.groq_model)
+    if name == "ollama":
+        return provider_cls(
+            settings.ollama_host, settings.ollama_model, enabled=settings.ollama_enabled
+        )
+    if name == "gemini":
+        return provider_cls(settings.gemini_api_key, settings.gemini_model)
+    raise KeyError(name)  # неизвестный провайдер — не должно случаться
+
+
+def _build_providers(settings: Settings) -> list[AIProvider]:
+    """Строит цепочку провайдеров, пропуская тех, чьи зависимости не установлены."""
+    providers: list[AIProvider] = []
+    for name in _provider_order(settings):
+        try:
+            providers.append(_instantiate(name, settings))
+        except ImportError as exc:
+            # Пакет провайдера не установлен (напр. нет google-genai для Gemini).
+            # Не роняем запуск — просто пропускаем этот провайдер.
+            log.warning(
+                "AI-провайдер '%s' пропущен: не установлена зависимость (%s). "
+                "Он не нужен, если вы им не пользуетесь.",
+                name, exc,
+            )
+        except Exception as exc:  # noqa: BLE001 — кривой конфиг провайдера не должен ронять запуск
+            log.warning("AI-провайдер '%s' пропущен: %s", name, exc)
+    return providers
 
 
 def create_llm(settings: Settings) -> LLMRouter:
     """Фабрика роутера LLM: строит цепочку провайдеров и логирует диагностику."""
     router = LLMRouter(_build_providers(settings))
+    available = [p.name for p in router._providers]
     configured = router.configured_names()
     log.info(
-        "LLM роутер: провайдеры=[%s], настроены=[%s]",
-        ", ".join(p.name for p in router._providers),
+        "LLM роутер: доступны=[%s], настроены=[%s]",
+        ", ".join(available) or "НЕТ",
         ", ".join(configured) or "НЕТ — задай ключ в .env",
     )
     if not configured:

@@ -108,6 +108,24 @@ def test_primary_provider_moves_first() -> None:
     assert set(names) == {"OpenRouter", "Groq", "Ollama", "Gemini"}
 
 
+def test_missing_dependency_skips_provider(monkeypatch) -> None:
+    """Провайдер с неустановленной зависимостью (напр. google-genai) пропускается,
+    а не роняет сборку цепочки — остальные работают."""
+    import ai.llm as llm_mod
+
+    real_import = llm_mod.importlib.import_module
+
+    def fake_import(path):
+        if path.endswith(".gemini"):
+            raise ModuleNotFoundError("No module named 'google'")
+        return real_import(path)
+
+    monkeypatch.setattr(llm_mod.importlib, "import_module", fake_import)
+    names = [p.name for p in _build_providers(_fake_settings("groq"))]
+    assert "Gemini" not in names          # пропущен из-за отсутствия зависимости
+    assert {"OpenRouter", "Groq", "Ollama"} <= set(names)  # остальные на месте
+
+
 # --- HTTP-провайдер (OpenAI-совместимый) через мок-транспорт ---
 
 def _openrouter_with(handler) -> OpenRouterProvider:
