@@ -31,11 +31,24 @@ class BaseParser(abc.ABC):
     ) -> None:
         self._queue = queue
         self._alerter = alerter
+        # Ключи уже отданных за эту сессию лидов — чтобы не заваливать очередь
+        # одними и теми же записями на каждом опросе фида (дедуп по БД идёт дальше,
+        # но он молчаливый и всё равно гоняет их через очередь впустую).
+        self._seen: set[str] = set()
 
-    async def emit(self, order: Order) -> None:
-        """Публикует заказ в очередь обработки."""
+    async def emit(self, order: Order) -> bool:
+        """Публикует заказ в очередь обработки.
+
+        Returns:
+            ``True`` — заказ поставлен в очередь; ``False`` — уже отдавался в этой
+            сессии и повторно не публикуется.
+        """
+        if order.dedup_key in self._seen:
+            return False
+        self._seen.add(order.dedup_key)
         await self._queue.put(order)
         log.debug("[%s] emit %s", self.name, order.dedup_key)
+        return True
 
     async def alert(self, text: str, key: str | None = None) -> None:
         """Отправляет технический алёрт владельцу (если алёртер подключён)."""

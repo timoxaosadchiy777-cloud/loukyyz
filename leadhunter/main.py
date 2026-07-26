@@ -59,9 +59,12 @@ async def handle_order(
     """Обрабатывает один заказ по конвейеру Parser → AI Score → Decision → …"""
     cfg = config.current()
 
-    # 0. Источник выключен в настройках — молча пропускаем (без запроса к ИИ).
+    # 0. Источник выключен в настройках — пропускаем (без запроса к ИИ).
     if not cfg.source_enabled(order.source):
-        log.debug("Источник %s выключен — пропуск %s", order.source, order.dedup_key)
+        log.info(
+            "Пропуск %s: источник '%s' выключен (enabled_sources=%s)",
+            order.dedup_key, order.source, list(cfg.enabled_sources) or "все",
+        )
         return
 
     # Бюджет берём только из явно распознанной суммы (budget_raw), а не из всего
@@ -71,7 +74,7 @@ async def handle_order(
 
     # 1. Дедупликация по источнику + external_id.
     if await db.is_duplicate(order.source, order.external_id):
-        log.debug("Дубликат пропущен: %s", order.dedup_key)
+        log.info("Пропуск %s: уже в базе (обработан ранее)", order.dedup_key)
         return
 
     # 2. Дешёвый предфильтр по бюджету — ДО обращения к LLM (экономия запросов).

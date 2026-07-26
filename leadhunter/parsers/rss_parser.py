@@ -100,8 +100,10 @@ class RssParser(BaseParser):
             order = self._entry_to_order(entry, source)
             if order is None:
                 continue
-            await self.emit(order)
-            emitted += 1
+            # emit() возвращает False для уже отданных в этой сессии лидов —
+            # считаем только реально новые, чтобы счётчик не врал.
+            if await self.emit(order):
+                emitted += 1
         return emitted
 
     def _entry_to_order(self, entry, source: str) -> Order | None:
