@@ -17,10 +17,13 @@ from pathlib import Path
 
 import yaml
 
+# Единый реестр бирж (core/sources.py) — здесь только реэкспорт для валидации
+# enabled_sources, чтобы список площадок не дублировался в двух местах.
+from core.sources import ALL_SOURCES
+
 log = logging.getLogger(__name__)
 
-# Известные источники лидов (для валидации enabled_sources).
-ALL_SOURCES: tuple[str, ...] = ("upwork", "fiverr", "rss")
+__all__ = ["ALL_SOURCES", "LlmConfig", "RuntimeConfig", "RuntimeConfigStore"]
 
 # Локальный, бесплатный провайдер по умолчанию — без ключей и платных API.
 _DEFAULT_LLM_PROVIDER = "ollama"
