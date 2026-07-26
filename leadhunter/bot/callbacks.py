@@ -25,3 +25,68 @@ class CrmAction(CallbackData, prefix="crm"):
 
     status: str
     order_id: int
+
+
+# --- Мастер настройки и панель управления ---------------------------------
+
+# Экран, с которого пришло нажатие: мастер онбординга или экран настроек.
+# От него зависит, куда возвращаться после переключения фильтра.
+CTX_WIZARD = "w"
+CTX_SETTINGS = "s"
+
+
+class MenuAction(CallbackData, prefix="mn"):
+    """Кнопка главного меню.
+
+    action: ``menu`` | ``settings`` | ``check`` | ``saved`` | ``sources``.
+    """
+
+    action: str
+
+
+class WizardAction(CallbackData, prefix="wz"):
+    """Навигация по мастеру онбординга.
+
+    step: экран назначения — ``sources`` | ``categories`` | ``keywords``
+        | ``budget`` | ``done`` | ``kw_input`` (запрос своих ключевых слов).
+    ctx: откуда пришли — мастер или экран настроек.
+    """
+
+    step: str
+    ctx: str
+
+
+class ToggleAction(CallbackData, prefix="tg"):
+    """Переключение одного пункта фильтра.
+
+    kind: ``src`` (биржа, по id) | ``cat`` | ``kw`` (по ИНДЕКСУ в пресетах).
+    value: id источника либо индекс в кортеже пресетов.
+    ctx: :data:`CTX_WIZARD` или :data:`CTX_SETTINGS` — куда вернуться.
+
+    Категории и ключевые слова передаются индексом, а не текстом: Telegram
+    ограничивает callback_data 64 байтами, и кириллица в UTF-8 этот лимит
+    пробивает.
+    """
+
+    kind: str
+    value: str
+    ctx: str
+
+
+class BudgetAction(CallbackData, prefix="bg"):
+    """Выбор минимального бюджета из пресетов.
+
+    value: сумма в USD (0 = без ограничения).
+    """
+
+    value: int
+    ctx: str
+
+
+class EditAction(CallbackData, prefix="ed"):
+    """Переход к редактированию одного фильтра из экрана настроек.
+
+    field: ``sources`` | ``categories`` | ``keywords`` | ``budget``.
+    """
+
+    field: str

@@ -8,6 +8,7 @@ from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
 from bot.access import AccessControl
@@ -15,6 +16,9 @@ from bot.admin import admin_router
 from bot.callbacks import CrmAction, OrderAction
 from bot.cards import render_card
 from bot.keyboards import order_keyboard
+from bot.menu import menu_router
+from bot.screens import render_menu
+from bot.wizard import start_wizard, wizard_router
 from config import Settings
 from core.models import CRM_LABELS, CrmStatus, Order
 from database.db import Database
@@ -27,10 +31,15 @@ _NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 @router.message(CommandStart())
-async def on_start(message: Message, db: Database, access: AccessControl) -> None:
+async def on_start(
+    message: Message, db: Database, access: AccessControl, state: FSMContext
+) -> None:
     user = message.from_user
     if user is None:
         return
+
+    # /start обрывает незавершённый ввод — иначе следующее сообщение уйдёт в него.
+    await state.clear()
 
     # Регистрируем при первом контакте: так администратор видит человека
     # в /users и может выдать ему доступ. Уже выданный доступ не сбрасывается.
@@ -44,13 +53,14 @@ async def on_start(message: Message, db: Database, access: AccessControl) -> Non
         )
         return
 
-    await message.answer(
-        "👋 <b>LeadHunter</b> на связи.\n"
-        "Сюда прилетают карточки заказов с AI-оценкой и готовым откликом.\n"
-        "Кнопки под карточкой ведут заказ по воронке: Написал → Переговоры → "
-        "Выиграл/Проиграл.\n\n"
-        f"Твой user id: <code>{user.id}</code>"
-    )
+    # Первый вход — мастер настройки; дальше сразу панель управления.
+    settings = await db.get_user_settings(user.id)
+    if not settings.onboarded:
+        await start_wizard(message, db, user.id)
+        return
+
+    text, markup = render_menu(settings)
+    await message.answer(text, reply_markup=markup)
 
 
 @router.callback_query(OrderAction.filter())
@@ -75,6 +85,25 @@ async def on_order_action(
             # Чистый текст отдельным сообщением — удобно копировать/пересылать.
             await query.message.answer(response, parse_mode=None)
         await query.answer("Отклик готов — копируй и отправляй 🚀")
+        return
+
+    if callback_data.action in ("save", "unsave"):
+        saved = callback_data.action == "save"
+        if saved:
+            await db.save_lead(query.from_user.id, callback_data.order_id)
+        else:
+            await db.unsave_lead(query.from_user.id, callback_data.order_id)
+        # Перерисовываем только клавиатуру — текст карточки не меняется.
+        if isinstance(query.message, Message):
+            try:
+                await query.message.edit_reply_markup(
+                    reply_markup=order_keyboard(
+                        callback_data.order_id, row["crm_status"], saved=saved
+                    )
+                )
+            except Exception:
+                log.debug("Клавиатура карточки %s не изменилась", callback_data.order_id)
+        await query.answer("Сохранено ⭐" if saved else "Убрано из избранного")
         return
 
     await query.answer()
@@ -105,11 +134,12 @@ async def on_crm_action(
     # Перерисовываем карточку с новым статусом воронки.
     order = Order.from_row(row)
     response = row["response"] or "(отклик отсутствует)"
+    saved = await db.is_lead_saved(query.from_user.id, callback_data.order_id)
     if isinstance(query.message, Message):
         try:
             await query.message.edit_text(
                 render_card(order, response),
-                reply_markup=order_keyboard(callback_data.order_id, status),
+                reply_markup=order_keyboard(callback_data.order_id, status, saved=saved),
                 link_preview_options=_NO_PREVIEW,
             )
         except Exception:
@@ -133,6 +163,8 @@ def create_dispatcher(db: Database, settings: Settings) -> Dispatcher:
     dp["access"] = AccessControl(db, settings.owner_id)
     # Админский роутер — первым: его команды видит только владелец.
     dp.include_router(admin_router)
+    dp.include_router(menu_router)
+    dp.include_router(wizard_router)
     dp.include_router(router)
     return dp
 
