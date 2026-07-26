@@ -1,20 +1,27 @@
-"""Асинхронное хранилище заказов на aiosqlite.
+"""Асинхронное хранилище заказов и пользователей на aiosqlite.
 
 Отвечает за дедупликацию (UNIQUE по source+external_id), сохранение истории,
 AI-оценки (score / category / reason / should_send) и статусов:
   * ``status``     — состояние пайплайна (new / rejected / filtered);
   * ``crm_status`` — воронка продаж (new / contacted / negotiation / won / lost).
+
+Плюс таблица ``users`` — доступ к боту (paid_status), выдаётся администратором.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import aiosqlite
 
 from core.models import CrmStatus, Order
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 # Таблица создаётся первой. Индексы — отдельно и ПОСЛЕ миграции колонок: на
 # старой БД колонки crm_status ещё нет, и индекс по ней нельзя создавать до ALTER.
@@ -41,10 +48,22 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 """
 
+# Пользователи бота. Доступ бинарный: paid_status 0 = нет доступа, 1 = есть.
+# Администратор (OWNER_ID) в этой таблице не нуждается — его доступ безусловен.
+_USERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    telegram_id INTEGER PRIMARY KEY,
+    username    TEXT    NOT NULL DEFAULT '',
+    paid_status INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL
+);
+"""
+
 _INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_orders_source_ext ON orders(source, external_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status     ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_crm        ON orders(crm_status);
+CREATE INDEX IF NOT EXISTS idx_users_paid        ON users(paid_status);
 """
 
 # Колонки, добавленные в LeadHunter 2.0. Для уже существующих БД (Alembic здесь
@@ -76,6 +95,7 @@ class Database:
         self._conn = await aiosqlite.connect(self._path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(_SCHEMA)
+        await self._conn.executescript(_USERS_SCHEMA)  # появляется и на старых БД
         await self._migrate()  # добавляет недостающие колонки (в т.ч. crm_status)
         await self._conn.executescript(_INDEXES)  # индексы — уже по всем колонкам
         await self._conn.commit()
@@ -165,3 +185,71 @@ class Database:
             "UPDATE orders SET crm_status = ? WHERE id = ?", (crm_status, order_id)
         )
         await self._connection.commit()
+
+    # ------------------------------------------------------------------
+    # Пользователи и доступ
+    # ------------------------------------------------------------------
+
+    async def register_user(self, telegram_id: int, username: str = "") -> None:
+        """Регистрирует пользователя при первом контакте (/start).
+
+        Уже выданный доступ НЕ сбрасывает: у существующей записи обновляется
+        только username (в Telegram его можно сменить в любой момент).
+        """
+        await self._connection.execute(
+            """
+            INSERT INTO users (telegram_id, username, paid_status, created_at)
+            VALUES (?, ?, 0, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET username = excluded.username
+            """,
+            (telegram_id, username, _utcnow_iso()),
+        )
+        await self._connection.commit()
+
+    async def set_paid_status(
+        self, telegram_id: int, paid: bool, username: str = ""
+    ) -> None:
+        """Выдаёт или отзывает доступ.
+
+        Работает и для пользователя, которого ещё нет в базе (не нажимал /start):
+        запись создаётся сразу с нужным статусом.
+        """
+        await self._connection.execute(
+            """
+            INSERT INTO users (telegram_id, username, paid_status, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET paid_status = excluded.paid_status
+            """,
+            (telegram_id, username, int(paid), _utcnow_iso()),
+        )
+        await self._connection.commit()
+
+    async def has_paid_access(self, telegram_id: int) -> bool:
+        cur = await self._connection.execute(
+            "SELECT 1 FROM users WHERE telegram_id = ? AND paid_status = 1 LIMIT 1",
+            (telegram_id,),
+        )
+        return await cur.fetchone() is not None
+
+    async def get_user(self, telegram_id: int) -> aiosqlite.Row | None:
+        cur = await self._connection.execute(
+            "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)
+        )
+        return await cur.fetchone()
+
+    async def list_users(self, limit: int = 100) -> list[aiosqlite.Row]:
+        """Список пользователей: сначала с доступом, потом по дате регистрации."""
+        cur = await self._connection.execute(
+            "SELECT * FROM users ORDER BY paid_status DESC, created_at ASC LIMIT ?",
+            (limit,),
+        )
+        return list(await cur.fetchall())
+
+    async def count_users(self) -> tuple[int, int]:
+        """Возвращает ``(всего, с доступом)``."""
+        cur = await self._connection.execute(
+            "SELECT COUNT(*) AS total,"
+            " COALESCE(SUM(paid_status), 0) AS paid FROM users"
+        )
+        row = await cur.fetchone()
+        return (row["total"], row["paid"]) if row else (0, 0)
