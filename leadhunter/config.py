@@ -33,8 +33,12 @@ def resolve_path(path: str) -> Path:
 class Settings(BaseSettings):
     """Настройки приложения, загружаемые из окружения."""
 
+    # .env берём по абсолютному пути от каталога проекта, а не от текущего рабочего
+    # каталога — иначе `python leadhunter/main.py` из корня репозитория не подхватит
+    # leadhunter/.env, и ключи (в т.ч. GEMINI_API_KEY) окажутся пустыми.
+    # Реальные переменные окружения по-прежнему имеют приоритет над файлом.
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(str(BASE_DIR / ".env"), ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
