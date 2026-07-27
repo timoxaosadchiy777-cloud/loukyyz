@@ -1,0 +1,53 @@
+# systemd-юнит для запуска LeadHunter без Docker.
+#
+#   sudo cp deploy/leadhunter.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now leadhunter
+#
+# Для запуска в Docker этот файл не нужен: там перезапуском занимается
+# `restart: unless-stopped` в docker-compose.yml.
+
+[Unit]
+Description=LeadHunter — заказы с фриланс-бирж в Telegram
+Documentation=https://github.com/timoxaosadchiy777-cloud/loukyyz
+# Сеть должна быть реально поднята, иначе первый опрос бирж упадёт впустую.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=leadhunter
+Group=leadhunter
+WorkingDirectory=/opt/leadhunter
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/leadhunter/.env
+ExecStart=/opt/leadhunter/.venv/bin/python main.py
+
+# Перезапуск при любом падении, но с паузой — иначе битый конфиг
+# уронит сервис в бесконечный цикл рестартов и зафлудит journald.
+Restart=always
+RestartSec=10s
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Даём время закрыть базу и сетевые соединения по SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Логи уходят в journald: `journalctl -u leadhunter -f`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=leadhunter
+
+# Минимальные привилегии: сервису нужен только свой каталог.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/leadhunter/data /opt/leadhunter/logs
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

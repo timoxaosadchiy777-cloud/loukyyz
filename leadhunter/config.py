@@ -119,6 +119,14 @@ class Settings(BaseSettings):
     # --- Прочее ---
     database_path: str = Field("leadhunter.db", alias="DATABASE_PATH")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
+    # Файл лога с ротацией. Пусто = только stdout (docker logs / journald).
+    log_file: str = Field("", alias="LOG_FILE")
+    log_max_bytes: int = Field(10 * 1024 * 1024, alias="LOG_MAX_BYTES")
+    log_backups: int = Field(5, alias="LOG_BACKUPS")
+
+    # Файл-биение для healthcheck: обновляется, пока жив event loop.
+    health_file: str = Field("data/health", alias="HEALTH_FILE")
+    health_interval: int = Field(30, alias="HEALTH_INTERVAL")
     # Очередь ограничена намеренно: если ИИ тормозит, парсеры притормозят вместе
     # с ним, а не будут набивать память лидами до OOM.
     queue_maxsize: int = Field(1000, alias="QUEUE_MAXSIZE")
@@ -147,6 +155,14 @@ class Settings(BaseSettings):
     @property
     def database_file(self) -> Path:
         return resolve_path(self.database_path)
+
+    @property
+    def health_path(self) -> Path:
+        return resolve_path(self.health_file)
+
+    @property
+    def log_path(self) -> Path | None:
+        return resolve_path(self.log_file) if self.log_file else None
 
 
 @lru_cache

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 
 from ai.llm import LLMRouter, create_llm
 from ai.responder import Responder
@@ -29,6 +30,7 @@ from config import Settings, get_settings
 from core.decision import apply_score, decide
 from core.fanout import Recipient, prefilter, select
 from core.filters import parse_budget
+from core.health import Heartbeat
 from core.logging import setup_logging
 from core.models import CrmStatus, Order
 from core.profile import ProfileLoader
@@ -268,8 +270,13 @@ async def process_orders(
 
 async def main() -> None:
     settings = get_settings()
-    setup_logging(settings.log_level)
-    log.info("Запуск LeadHunter 2.0…")
+    setup_logging(
+        settings.log_level,
+        log_file=settings.log_path,
+        max_bytes=settings.log_max_bytes,
+        backups=settings.log_backups,
+    )
+    log.info("Запуск LeadHunter…")
 
     # Пути резолвим от каталога проекта — работает из любого рабочего каталога.
     profile_file = settings.profile_file
@@ -306,8 +313,11 @@ async def main() -> None:
         queue, settings, alerter, enabled_sources=config.current().enabled_sources
     )
 
+    heartbeat = Heartbeat(settings.health_path, settings.health_interval)
+
     tasks = [
         asyncio.create_task(dp.start_polling(bot), name="bot"),
+        asyncio.create_task(heartbeat.run(), name="heartbeat"),
         *[
             asyncio.create_task(parser.run_safe(), name=f"parser:{parser.name}")
             for parser in parsers
@@ -328,8 +338,22 @@ async def main() -> None:
         ),
     ]
 
+    stop = asyncio.Event()
+    _install_signal_handlers(stop)
+
     try:
-        await asyncio.gather(*tasks)
+        # Ждём либо сигнала остановки, либо падения любой из задач: если умер
+        # поллинг бота, продолжать работу смысла нет — пусть перезапустит Docker.
+        waiter = asyncio.create_task(stop.wait(), name="stop-signal")
+        done, _ = await asyncio.wait(
+            [*tasks, waiter], return_when=asyncio.FIRST_COMPLETED
+        )
+        waiter.cancel()
+        for task in done:
+            if task is not waiter and not task.cancelled():
+                exc = task.exception()
+                if exc is not None:
+                    log.error("Задача %s упала: %s", task.get_name(), exc)
     finally:
         log.info("Остановка LeadHunter…")
         for task in tasks:
@@ -343,6 +367,24 @@ async def main() -> None:
         await _quiet(responder.aclose())
         await _quiet(db.close())
         await _quiet(bot.session.close())
+
+
+def _install_signal_handlers(stop: asyncio.Event) -> None:
+    """Просит цикл остановиться по SIGTERM/SIGINT.
+
+    Без этого `docker stop` убивал бы процесс мгновенно, не дав закрыть базу и
+    сетевые соединения. На платформах без add_signal_handler (Windows) молча
+    остаёмся на поведении по умолчанию.
+    """
+    loop = asyncio.get_running_loop()
+    for name in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, RuntimeError):
+            log.debug("Сигнал %s не перехватывается на этой платформе", name)
 
 
 async def _quiet(awaitable) -> None:

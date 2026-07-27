@@ -1,0 +1,20 @@
+# Ротация файловых логов LeadHunter (когда задан LOG_FILE).
+#
+#   sudo cp deploy/leadhunter.logrotate /etc/logrotate.d/leadhunter
+#
+# Приложение ротирует свой лог и само (LOG_MAX_BYTES / LOG_BACKUPS). Этот файл
+# нужен, если логи пишутся не только приложением или если хочется хранить их
+# по датам, а не по размеру.
+
+/opt/leadhunter/logs/*.log {
+    daily
+    rotate 14
+    size 10M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    # Не создаём файл заново: приложение держит его открытым и создаст само.
+    copytruncate
+    su leadhunter leadhunter
+}

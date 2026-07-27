@@ -3,13 +3,49 @@ services:
     build: .
     image: leadhunter:latest
     container_name: leadhunter
+    # Поднимается сам после перезагрузки VPS и после падения, но не после
+    # ручного `docker compose stop` — иначе остановить бота было бы нельзя.
     restart: unless-stopped
     env_file: .env
     environment:
       # Базу и оперативные настройки держим на томе — переживают пересборку.
       DATABASE_PATH: /app/data/leadhunter.db
       RUNTIME_CONFIG_PATH: /app/data/settings.yaml
+      HEALTH_FILE: /app/data/health
+      LOG_FILE: /app/logs/leadhunter.log
     volumes:
       - ./data:/app/data
+      - ./logs:/app/logs
       # Профиль монтируем с хоста — правьте его без пересборки образа (hot-reload).
-      - ./profile.md:/app/profile.md
+      - ./profile.md:/app/profile.md:ro
+
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 60s
+      timeout: 10s
+      # Старт даём с запасом: первый прогон поднимает базу и миграции.
+      start_period: 45s
+      retries: 3
+
+    # Логи Docker тоже ограничиваем: без этого json-файл растёт до конца диска.
+    # Файловый лог приложения ротируется отдельно (LOG_FILE + LOG_MAX_BYTES).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # Потолок ресурсов: SQLite + httpx + aiogram на типовом VPS укладываются
+    # в эти рамки, а утечка не утащит за собой весь сервер.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    # Даём время закрыть базу и сетевые соединения по SIGTERM.
+    stop_grace_period: 30s
+
+    security_opt:
+      - no-new-privileges:true
