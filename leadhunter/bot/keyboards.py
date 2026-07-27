@@ -8,12 +8,16 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.callbacks import (
     CTX_SETTINGS,
     CTX_WIZARD,
+    AccessAction,
+    AdminAction,
     BudgetAction,
     CrmAction,
     EditAction,
+    HelpAction,
     MenuAction,
     OrderAction,
     ToggleAction,
+    UserAction,
     WizardAction,
 )
 from core.models import CRM_LABELS, CrmStatus
@@ -99,7 +103,14 @@ def menu_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🔍 Проверить сейчас", callback_data=MenuAction(action="check"))
     builder.button(text="⭐ Сохранённые лиды", callback_data=MenuAction(action="saved"))
     builder.button(text="🌐 Биржи", callback_data=MenuAction(action="sources"))
-    builder.adjust(2, 2)
+    builder.button(text="❓ Справка", callback_data=HelpAction())
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()
+
+
+def help_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ В меню", callback_data=MenuAction(action="menu"))
     return builder.as_markup()
 
 
@@ -202,6 +213,117 @@ def budget_keyboard(settings: UserSettings, ctx: str = CTX_WIZARD) -> InlineKeyb
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="◀️ В меню", callback_data=MenuAction(action="menu"))
+    return builder.as_markup()
+
+
+# --- Доступ ---------------------------------------------------------------
+
+
+def request_access_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Стартовый экран без доступа: заявка в один тап."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="📨 Запросить доступ",
+        callback_data=AccessAction(action="request", user_id=user_id),
+    )
+    return builder.as_markup()
+
+
+def access_request_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Уведомление администратору о заявке: решение одной кнопкой."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Выдать доступ",
+        callback_data=AccessAction(action="grant", user_id=user_id),
+    )
+    builder.button(
+        text="❌ Отклонить",
+        callback_data=AccessAction(action="decline", user_id=user_id),
+    )
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+# --- Админ-панель ---------------------------------------------------------
+
+# Сколько пользователей показываем на одной странице списка.
+ADMIN_PAGE_SIZE = 8
+
+
+def admin_keyboard(requests: int = 0) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👥 Пользователи", callback_data=AdminAction(action="users"))
+    builder.button(
+        # Счётчик прямо на кнопке — чтобы заявки не терялись.
+        text=f"📨 Заявки ({requests})" if requests else "📨 Заявки",
+        callback_data=AdminAction(action="requests"),
+    )
+    builder.button(text="📊 Статистика", callback_data=AdminAction(action="stats"))
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+
+def admin_users_keyboard(rows, page: int, total: int) -> InlineKeyboardMarkup:
+    """Список пользователей: тап по строке переключает доступ."""
+    builder = InlineKeyboardBuilder()
+    layout: list[int] = []
+    for row in rows:
+        paid = bool(row["paid_status"])
+        handle = f"@{row['username']}" if row["username"] else str(row["telegram_id"])
+        builder.button(
+            text=f"{'✅' if paid else '🔒'} {handle}",
+            callback_data=UserAction(
+                user_id=row["telegram_id"], grant=not paid, page=page
+            ),
+        )
+        layout.append(1)
+
+    pages = max(1, (total + ADMIN_PAGE_SIZE - 1) // ADMIN_PAGE_SIZE)
+    if pages > 1:
+        if page > 0:
+            builder.button(
+                text="◀️", callback_data=AdminAction(action="users", page=page - 1)
+            )
+        builder.button(
+            text=f"{page + 1}/{pages}", callback_data=AdminAction(action="users", page=page)
+        )
+        if page + 1 < pages:
+            builder.button(
+                text="▶️", callback_data=AdminAction(action="users", page=page + 1)
+            )
+        layout.append(1 + (page > 0) + (page + 1 < pages))
+
+    builder.button(text="◀️ В админку", callback_data=AdminAction(action="panel"))
+    layout.append(1)
+    builder.adjust(*layout)
+    return builder.as_markup()
+
+
+def admin_requests_keyboard(rows) -> InlineKeyboardMarkup:
+    """Очередь заявок: по кнопке «выдать» на каждую."""
+    builder = InlineKeyboardBuilder()
+    layout: list[int] = []
+    for row in rows:
+        handle = f"@{row['username']}" if row["username"] else str(row["telegram_id"])
+        builder.button(
+            text=f"✅ Выдать {handle}",
+            callback_data=AccessAction(action="grant", user_id=row["telegram_id"]),
+        )
+        builder.button(
+            text="❌",
+            callback_data=AccessAction(action="decline", user_id=row["telegram_id"]),
+        )
+        layout.append(2)
+
+    builder.button(text="◀️ В админку", callback_data=AdminAction(action="panel"))
+    layout.append(1)
+    builder.adjust(*layout)
+    return builder.as_markup()
+
+
+def back_to_admin_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ В админку", callback_data=AdminAction(action="panel"))
     return builder.as_markup()
 
 

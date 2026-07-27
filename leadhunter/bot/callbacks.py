@@ -90,3 +90,43 @@ class EditAction(CallbackData, prefix="ed"):
     """
 
     field: str
+
+
+class HelpAction(CallbackData, prefix="hlp"):
+    """Открыть справку."""
+
+    action: str = "show"
+
+
+# --- Доступ и админка -----------------------------------------------------
+
+
+class AccessAction(CallbackData, prefix="ac"):
+    """Заявка на доступ.
+
+    action: ``request`` — нажал пользователь; ``grant`` / ``decline`` — решение
+        администратора прямо из уведомления о заявке.
+    user_id: кого касается решение (у ``request`` совпадает с нажавшим).
+    """
+
+    action: str
+    user_id: int
+
+
+class AdminAction(CallbackData, prefix="ad"):
+    """Навигация по админ-панели.
+
+    action: ``panel`` | ``users`` | ``requests`` | ``stats``.
+    page: страница списка пользователей (по 0 для остальных экранов).
+    """
+
+    action: str
+    page: int = 0
+
+
+class UserAction(CallbackData, prefix="au"):
+    """Переключение доступа конкретному пользователю из списка админки."""
+
+    user_id: int
+    grant: bool
+    page: int = 0
