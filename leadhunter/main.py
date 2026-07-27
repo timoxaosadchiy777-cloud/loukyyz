@@ -334,8 +334,13 @@ async def main() -> None:
 
     heartbeat = Heartbeat(settings.health_path, settings.health_interval)
 
+    # Критические задачи: их завершение означает, что работать дальше нельзя.
+    # Парсеры сюда НЕ входят — они перезапускаются сами (BaseParser.run_safe),
+    # и падение биржи не должно останавливать доставку и бота.
+    bot_task = asyncio.create_task(dp.start_polling(bot), name="bot")
+
     tasks = [
-        asyncio.create_task(dp.start_polling(bot), name="bot"),
+        bot_task,
         asyncio.create_task(heartbeat.run(), name="heartbeat"),
         *[
             asyncio.create_task(parser.run_safe(), name=f"parser:{parser.name}")
@@ -372,7 +377,7 @@ async def main() -> None:
         # поллинг бота, продолжать работу смысла нет — пусть перезапустит Docker.
         waiter = asyncio.create_task(stop.wait(), name="stop-signal")
         done, _ = await asyncio.wait(
-            [*tasks, waiter], return_when=asyncio.FIRST_COMPLETED
+            [bot_task, waiter], return_when=asyncio.FIRST_COMPLETED
         )
         waiter.cancel()
         for task in done:

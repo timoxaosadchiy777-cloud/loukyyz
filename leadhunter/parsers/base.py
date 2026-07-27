@@ -23,6 +23,10 @@ log = logging.getLogger(__name__)
 # десятки записей, так что окна в несколько тысяч хватает с большим запасом.
 SEEN_LIMIT = 5000
 
+# Пауза перед перезапуском упавшего парсера и её потолок.
+RESTART_DELAY = 30
+MAX_RESTART_DELAY = 900
+
 
 class BaseParser(abc.ABC):
     """Общий контракт для всех источников заказов."""
@@ -72,17 +76,36 @@ class BaseParser(abc.ABC):
             await self._alerter.alert(text, key=key)
 
     async def run_safe(self) -> None:
-        """Запускает парсер, гася любые исключения (чтобы не ронять gather)."""
-        try:
-            await self.run()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.exception("[%s] парсер аварийно остановлен", self.name)
-            await self.alert(
-                f"Парсер «{self.name}» аварийно остановлен: {exc}",
-                key=f"parser-crash:{self.name}",
-            )
+        """Держит парсер живым, что бы с ним ни случилось.
+
+        Источник — самая ненадёжная часть системы: биржа меняет вёрстку, рвётся
+        сеть, протухает сессия. Ни одно из этих событий не должно ни ронять бота,
+        ни выключать источник навсегда, поэтому парсер перезапускается с
+        нарастающей паузой, а владелец узнаёт об этом один раз.
+
+        Метод не возвращает управление штатно: он живёт до отмены задачи.
+        Иначе завершение парсера выглядело бы как повод остановить приложение.
+        """
+        delay = RESTART_DELAY
+        while True:
+            try:
+                await self.run()
+                # run() завершился сам: для бесконечного цикла это ненормально,
+                # но выключать источник насовсем всё равно не станем.
+                log.warning("[%s] парсер завершился сам — перезапуск через %s c",
+                            self.name, delay)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.exception("[%s] парсер упал — перезапуск через %s c", self.name, delay)
+                await self.alert(
+                    f"Парсер «{self.name}» упал: {exc}. Перезапускаю автоматически.",
+                    key=f"parser-crash:{self.name}",
+                )
+
+            await asyncio.sleep(delay)
+            # Пауза растёт до потолка: если биржа лежит, не долбим её каждую минуту.
+            delay = min(delay * 2, MAX_RESTART_DELAY)
 
     @abc.abstractmethod
     async def run(self) -> None:

@@ -102,11 +102,6 @@ class KworkParser(BaseParser):
         url = self._page_url(page)
         payload = await self._fetcher.get_text(url, label=f"{self._source}:p{page}")
 
-        if len(payload) < _MIN_PAGE_SIZE:
-            raise FetchError(
-                f"{url}: ответ подозрительно короткий ({len(payload)} б) — "
-                "возможна блокировка или капча"
-            )
         if self._looks_logged_out(payload):
             raise FetchError(
                 f"{url}: биржа показала форму входа — обновите KWORK_COOKIE"
@@ -114,11 +109,19 @@ class KworkParser(BaseParser):
 
         result = extract_orders(payload, source=self._source, base_url=self._base_url)
         if not result.orders:
-            # Отличаем «нет новых заказов» от «сломался разбор»: пустая выдача
-            # при большой странице — это почти всегда смена вёрстки.
+            # Заказы не нашлись — надо назвать ПРИЧИНУ, иначе владелец увидит в
+            # логе бесполезное «пусто» и не поймёт, чинить парсер или ждать.
+            # Короткий ответ — почти наверняка заглушка, капча или бан; большая
+            # страница без заказов — смена вёрстки.
+            if len(payload) < _MIN_PAGE_SIZE:
+                raise FetchError(
+                    f"{url}: ответ подозрительно короткий ({len(payload)} б) — "
+                    "возможна блокировка или капча"
+                )
             raise FetchError(
                 f"{url}: заказы не распознаны ни одной стратегией "
-                f"(страница {len(payload)} б) — вероятно, изменилась вёрстка"
+                f"(страница {len(payload)} б) — вероятно, изменилась вёрстка. "
+                "Селекторы правятся в parsers/kwork_extract.py"
             )
 
         log.debug(

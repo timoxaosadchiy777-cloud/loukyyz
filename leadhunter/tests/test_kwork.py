@@ -325,3 +325,153 @@ def test_broken_factory_does_not_break_startup() -> None:
         assert "kwork" in [p.name for p in parsers]
     finally:
         registry.SOURCES = original
+
+
+# --- Полный путь парсера (сеть подменена) ---------------------------------
+
+
+class _FakeFetcher:
+    """Подменяет сеть: отдаёт заготовленные ответы и считает запросы."""
+
+    def __init__(self, *pages: str, fail: Exception | None = None) -> None:
+        self.pages = list(pages)
+        self.fail = fail
+        self.urls: list[str] = []
+        self.closed = False
+        self.authenticated = False
+
+    async def get_text(self, url: str, *, label: str = "") -> str:
+        self.urls.append(url)
+        if self.fail is not None:
+            raise self.fail
+        return self.pages[min(len(self.urls) - 1, len(self.pages) - 1)]
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _parser(fetcher, **kwargs):
+    from parsers.kwork_parser import KworkParser
+
+    settings = _Settings()
+    for key, value in kwargs.items():
+        setattr(settings, key, value)
+    parser = KworkParser(asyncio.Queue(), settings, None)
+    parser._fetcher = fetcher
+    return parser
+
+
+async def test_parser_emits_orders_from_live_like_page() -> None:
+    parser = _parser(_FakeFetcher(EMBEDDED_JSON_PAGE), kwork_pages=1)
+    emitted = await parser.poll_once()
+
+    assert emitted == 2
+    order = parser._queue.get_nowait()
+    assert order.source == "kwork"
+    assert order.budget_currency == RUB
+    # Бюджет приведён к USD по курсу из настроек — иначе рубли пробьют порог.
+    assert order.budget_value == round(15000 / 95)
+
+
+async def test_parser_walks_multiple_pages() -> None:
+    parser = _parser(_FakeFetcher(EMBEDDED_JSON_PAGE, HTML_CARDS_PAGE), kwork_pages=2)
+    emitted = await parser.poll_once()
+
+    assert emitted == 4  # 2 из JSON + 2 из карточек
+    assert parser._fetcher.urls[1].endswith("page=2")
+
+
+async def test_repeat_poll_does_not_emit_same_orders() -> None:
+    parser = _parser(_FakeFetcher(EMBEDDED_JSON_PAGE), kwork_pages=1)
+    assert await parser.poll_once() == 2
+    assert await parser.poll_once() == 0  # те же лиды повторно не уходят
+
+
+async def test_logged_out_page_is_reported_clearly() -> None:
+    page = '<html><body><form id="login-form">Войти на Kwork</form>' + "x" * 600 + "</body></html>"
+    parser = _parser(_FakeFetcher(page), kwork_pages=1)
+
+    with pytest.raises(Exception) as exc:
+        await parser.poll_once()
+    assert "KWORK_COOKIE" in str(exc.value)
+
+
+async def test_short_page_is_reported_as_block() -> None:
+    parser = _parser(_FakeFetcher("<html></html>"), kwork_pages=1)
+
+    with pytest.raises(Exception) as exc:
+        await parser.poll_once()
+    assert "блокировка" in str(exc.value) or "капча" in str(exc.value)
+
+
+async def test_unrecognized_markup_names_the_real_cause() -> None:
+    """Пустая выдача при большой странице — это смена вёрстки, а не «нет заказов»."""
+    parser = _parser(_FakeFetcher("<html><body>" + "текст " * 200 + "</body></html>"))
+
+    with pytest.raises(Exception) as exc:
+        await parser.poll_once()
+    assert "вёрстка" in str(exc.value)
+
+
+async def test_network_failure_propagates_for_supervisor() -> None:
+    from parsers.http import FetchError
+
+    parser = _parser(_FakeFetcher(fail=FetchError("таймаут")), kwork_pages=1)
+    with pytest.raises(FetchError):
+        await parser.poll_once()
+
+
+# --- Падение источника не ломает бота -------------------------------------
+
+
+async def test_parser_restarts_itself_after_crash(monkeypatch) -> None:
+    """Смена вёрстки не должна ни ронять бота, ни выключать источник навсегда."""
+    import parsers.base as base
+    from parsers.base import BaseParser
+
+    monkeypatch.setattr(base, "RESTART_DELAY", 0.01)
+    monkeypatch.setattr(base, "MAX_RESTART_DELAY", 0.01)
+
+    attempts = 0
+
+    class _Broken(BaseParser):
+        name = "kwork"
+
+        async def run(self) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise RuntimeError("вёрстка изменилась")
+
+    task = asyncio.create_task(_Broken(asyncio.Queue()).run_safe())
+    await asyncio.sleep(0.1)
+    still_running = not task.done()
+    task.cancel()
+
+    assert attempts > 1        # перезапустился
+    assert still_running       # и задача жива, а не завершилась молча
+
+
+async def test_parser_that_returns_is_also_restarted(monkeypatch) -> None:
+    """run(), завершившийся сам, тоже не повод выключать источник."""
+    import parsers.base as base
+    from parsers.base import BaseParser
+
+    monkeypatch.setattr(base, "RESTART_DELAY", 0.01)
+    monkeypatch.setattr(base, "MAX_RESTART_DELAY", 0.01)
+
+    runs = 0
+
+    class _Quitter(BaseParser):
+        name = "rss"
+
+        async def run(self) -> None:
+            nonlocal runs
+            runs += 1
+
+    task = asyncio.create_task(_Quitter(asyncio.Queue()).run_safe())
+    await asyncio.sleep(0.1)
+    alive = not task.done()
+    task.cancel()
+
+    assert runs > 1
+    assert alive
