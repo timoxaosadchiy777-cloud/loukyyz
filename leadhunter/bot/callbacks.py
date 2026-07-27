@@ -73,6 +73,20 @@ class ToggleAction(CallbackData, prefix="tg"):
     ctx: str
 
 
+class SourceAction(CallbackData, prefix="sr"):
+    """Действия на экране «Биржи», кроме переключения одной площадки.
+
+    action: ``all`` — включить все доступные; ``none`` — выключить все;
+        ``poll`` — внеочередная проверка биржи из ``value``.
+    value: id источника (только для ``poll``).
+    ctx: :data:`CTX_WIZARD` или :data:`CTX_SETTINGS` — куда вернуться.
+    """
+
+    action: str
+    value: str = ""
+    ctx: str = CTX_SETTINGS
+
+
 class BudgetAction(CallbackData, prefix="bg"):
     """Выбор минимального бюджета из пресетов.
 

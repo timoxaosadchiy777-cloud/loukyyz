@@ -16,6 +16,7 @@ from bot.callbacks import (
     HelpAction,
     MenuAction,
     OrderAction,
+    SourceAction,
     ToggleAction,
     UserAction,
     WizardAction,
@@ -151,23 +152,62 @@ def _navigation(builder: InlineKeyboardBuilder, step: str, ctx: str) -> tuple[in
     return (2,) if index > 0 else (1,)
 
 
-def sources_keyboard(settings: UserSettings, ctx: str = CTX_WIZARD) -> InlineKeyboardMarkup:
-    """Биржи. Недоступные показываем неактивными — место под Kwork занято заранее."""
+def source_mark(source, enabled: bool) -> str:
+    """Состояние биржи одним символом: 🟢 включена · ⚪ выключена · 🔴 нет парсера."""
+    if not source.available:
+        return "🔴"
+    return "🟢" if enabled else "⚪"
+
+
+def sources_keyboard(
+    settings: UserSettings,
+    ctx: str = CTX_WIZARD,
+    *,
+    with_poll: bool = False,
+) -> InlineKeyboardMarkup:
+    """Биржи: тап по строке включает/выключает площадку.
+
+    Площадка без парсера (``available=False``) помечена 🔴 и не включается —
+    её кнопка только объясняет, почему заказов оттуда нет.
+
+    Args:
+        with_poll: Дорисовать у каждой включённой биржи кнопку «🔄» —
+            внеочередную проверку. В мастере она не нужна: там ещё нечего
+            проверять, и лишний столбец только загромождает экран.
+    """
     builder = InlineKeyboardBuilder()
     rows: list[int] = []
     for source in SOURCES:
         if not source.available:
-            # Кнопка-заглушка: сообщает, что площадка в планах, и ничего не меняет.
+            # Кнопка-заглушка: объясняет, почему биржа недоступна, и ничего не меняет.
             builder.button(
-                text=f"🔜 {source.button_label}",
+                text=f"🔴 {source.label}",
                 callback_data=ToggleAction(kind="soon", value=source.id, ctx=ctx),
             )
-        else:
+            rows.append(1)
+            continue
+
+        enabled = settings.source_enabled(source.id)
+        builder.button(
+            text=f"{source_mark(source, enabled)} {source.label}",
+            callback_data=ToggleAction(kind="src", value=source.id, ctx=ctx),
+        )
+        if with_poll and enabled:
             builder.button(
-                text=f"{_mark(settings.source_enabled(source.id))} {source.label}",
-                callback_data=ToggleAction(kind="src", value=source.id, ctx=ctx),
+                text="🔄",
+                callback_data=SourceAction(action="poll", value=source.id, ctx=ctx),
             )
-        rows.append(1)
+            rows.append(2)
+        else:
+            rows.append(1)
+
+    builder.button(
+        text="✅ Выбрать все", callback_data=SourceAction(action="all", ctx=ctx)
+    )
+    builder.button(
+        text="⚪ Отключить все", callback_data=SourceAction(action="none", ctx=ctx)
+    )
+    rows.append(2)
     return _finish(builder, rows, _navigation(builder, "sources", ctx))
 
 

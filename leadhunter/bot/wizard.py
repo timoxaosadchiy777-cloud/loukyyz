@@ -26,6 +26,7 @@ from bot.callbacks import (
     CTX_SETTINGS,
     CTX_WIZARD,
     BudgetAction,
+    SourceAction,
     ToggleAction,
     WizardAction,
 )
@@ -36,6 +37,7 @@ from bot.screens import (
     render_step,
     render_wizard_intro,
 )
+from core.sources import SOURCES, get_source, source_label
 from core.user_settings import CATEGORIES, KEYWORD_PRESETS, UserSettings
 from database.db import Database
 
@@ -78,10 +80,37 @@ def _index(value: str, presets: tuple[str, ...]) -> str | None:
 
 
 async def _rerender(
-    query: CallbackQuery, step: str, settings: UserSettings, ctx: str
+    query: CallbackQuery,
+    step: str,
+    settings: UserSettings,
+    ctx: str,
+    *,
+    active: set[str] | None = None,
+    blocked: set[str] | None = None,
 ) -> None:
-    text, markup = render_step(step, settings, ctx)
+    text, markup = render_step(step, settings, ctx, active=active, blocked=blocked)
     await show_screen(query, text, markup)
+
+
+async def apply_sources(
+    query: CallbackQuery, db: Database, ctx: str, supervisor
+) -> None:
+    """Перерисовывает экран «Биржи» по факту: что реально опрашивается.
+
+    Сверку состава парсеров запускаем сразу, а не ждём фонового прохода —
+    иначе включённая биржа начинала бы работать с задержкой, и на экране была
+    бы неправда.
+    """
+    active: set[str] | None = None
+    blocked: set[str] | None = None
+    if supervisor is not None:
+        try:
+            await supervisor.reconcile()
+            active, blocked = supervisor.active, supervisor.blocked
+        except Exception:  # noqa: BLE001 — сбой сверки не должен ломать экран
+            log.exception("Не удалось согласовать состав парсеров")
+    settings = await db.get_user_settings(query.from_user.id)
+    await _rerender(query, "sources", settings, ctx, active=active, blocked=blocked)
 
 
 # --- Навигация по шагам ---------------------------------------------------
@@ -129,8 +158,13 @@ async def on_wizard_step(
 
 @wizard_router.callback_query(ToggleAction.filter(F.kind == "soon"))
 async def on_soon(query: CallbackQuery, callback_data: ToggleAction) -> None:
-    """Площадка есть в реестре, но парсера ещё нет."""
-    await query.answer(texts.SOURCE_SOON, show_alert=True)
+    """Площадка есть в реестре, но парсера нет — объясняем, почему."""
+    source = get_source(callback_data.value)
+    note = source.note if source and source.note else ""
+    await query.answer(
+        f"{texts.SOURCE_SOON}\n\n{note}" if note else texts.SOURCE_SOON,
+        show_alert=True,
+    )
 
 
 @wizard_router.callback_query(ToggleAction.filter())
@@ -139,6 +173,7 @@ async def on_toggle(
     callback_data: ToggleAction,
     db: Database,
     access: AccessControl,
+    sources=None,
 ) -> None:
     if not await access.has_access(query.from_user.id):
         await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
@@ -149,10 +184,13 @@ async def on_toggle(
 
     if kind == "src":
         # Источники хранятся отдельной таблицей: пишем туда и перечитываем.
-        await db.toggle_source(query.from_user.id, callback_data.value)
-        updated = await db.get_user_settings(query.from_user.id)
-        await _rerender(query, "sources", updated, callback_data.ctx)
-        await query.answer()
+        enabled = await db.toggle_source(query.from_user.id, callback_data.value)
+        await apply_sources(query, db, callback_data.ctx, sources)
+        label = source_label(callback_data.value)
+        await query.answer(
+            f"{label}: включена — начинаем опрос" if enabled
+            else f"{label}: выключена — запросов к сайту больше нет"
+        )
         return
     elif kind == "cat":
         category = _index(callback_data.value, CATEGORIES)
@@ -175,6 +213,67 @@ async def on_toggle(
     await db.save_user_settings(query.from_user.id, updated)
     await _rerender(query, step, updated, callback_data.ctx)
     await query.answer()
+
+
+@wizard_router.callback_query(SourceAction.filter())
+async def on_source_action(
+    query: CallbackQuery,
+    callback_data: SourceAction,
+    db: Database,
+    access: AccessControl,
+    sources=None,
+) -> None:
+    """«Выбрать все» / «Отключить все» / «🔄 Проверить сейчас» по бирже."""
+    if not await access.has_access(query.from_user.id):
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
+        return
+
+    user_id = query.from_user.id
+    action = callback_data.action
+
+    if action in ("all", "none"):
+        enable = action == "all"
+        for source in SOURCES:
+            if source.available:
+                await db.set_source_enabled(user_id, source.id, enable)
+        await apply_sources(query, db, callback_data.ctx, sources)
+        await query.answer(
+            "Включены все биржи" if enable else "Все биржи выключены — опроса не будет"
+        )
+        return
+
+    if action != "poll":
+        await query.answer()
+        return
+
+    await query.answer(await _poll_source(callback_data.value, sources), show_alert=True)
+
+
+async def _poll_source(source_id: str, supervisor) -> str:
+    """Внеочередной опрос биржи. Возвращает текст для всплывающего окна."""
+    source = get_source(source_id)
+    label = source.label if source else source_id
+
+    if supervisor is None:
+        return texts.SOURCE_CHECK_OFFLINE
+    if source_id not in supervisor.active:
+        need = (
+            f"\n\nНужен {source.needs} в .env" if source and source.needs else ""
+        )
+        return f"⚠️ {label}: опрос не идёт.{need}"
+
+    try:
+        found = await supervisor.poll_now(source_id)
+    except Exception as exc:  # noqa: BLE001 — показываем настоящую причину
+        log.warning("Внеочередной опрос %s не удался: %s", source_id, exc)
+        return f"⚠️ {label}: биржа не ответила.\n\n{exc}"
+
+    if found is None:
+        return f"{label}: биржа опрашивается по расписанию, проверка вручную недоступна."
+    return (
+        f"✅ {label}: найдено новых заказов — {found}.\n\n"
+        "Подходящие под твои фильтры придут карточками."
+    )
 
 
 @wizard_router.callback_query(BudgetAction.filter())

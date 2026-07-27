@@ -25,7 +25,7 @@ from bot.screens import (
     render_step,
 )
 from bot.keyboards import back_to_menu_keyboard
-from bot.wizard import show_screen
+from bot.wizard import apply_sources, show_screen
 from database.db import Database
 
 log = logging.getLogger(__name__)
@@ -59,6 +59,7 @@ async def on_menu_action(
     callback_data: MenuAction,
     db: Database,
     access: AccessControl,
+    sources=None,
 ) -> None:
     if not await access.has_access(query.from_user.id):
         await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
@@ -72,7 +73,9 @@ async def on_menu_action(
     elif action == "settings":
         text, markup = render_settings(settings)
     elif action == "sources":
-        text, markup = render_step("sources", settings, CTX_SETTINGS)
+        await apply_sources(query, db, CTX_SETTINGS, sources)
+        await query.answer()
+        return
     elif action == "check":
         rows = await db.recent_orders(limit=_SCAN_LIMIT)
         matched = filter_orders(rows, settings, limit=LEADS_LIMIT)
@@ -107,11 +110,17 @@ async def on_edit_field(
     callback_data: EditAction,
     db: Database,
     access: AccessControl,
+    sources=None,
 ) -> None:
     """Правка одного фильтра: те же экраны, что в мастере, но с возвратом
     на экран настроек."""
     if not await access.has_access(query.from_user.id):
         await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
+        return
+
+    if callback_data.field == "sources":
+        await apply_sources(query, db, CTX_SETTINGS, sources)
+        await query.answer()
         return
 
     settings = await db.get_user_settings(query.from_user.id)

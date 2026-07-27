@@ -23,6 +23,7 @@ from bot.keyboards import (
 )
 from bot.cards import TELEGRAM_LIMIT
 from core.models import Order
+from core.sources import SOURCES
 from core.user_settings import UserSettings
 
 # Сколько лидов показываем в списках («Проверить сейчас», «Сохранённые»).
@@ -40,8 +41,9 @@ _STEP_TITLES: dict[str, str] = {
 
 _STEP_HINTS: dict[str, str] = {
     "sources": (
-        "Отметь площадки, с которых нужны заказы.\n"
-        "Если не отмечено ничего — присылаем со всех доступных."
+        "Отметь биржи, с которых нужны заказы.\n"
+        "Выключенная биржа не опрашивается — запросов к сайту не будет.\n\n"
+        "🟢 включена · ⚪ выключена · 🔴 нет парсера"
     ),
     "categories": (
         "Что тебе интересно? Отметь подходящее.\n"
@@ -57,8 +59,9 @@ _STEP_HINTS: dict[str, str] = {
     ),
 }
 
+# «Биржи» строятся отдельно (см. render_step): у них своя раскладка с кнопками
+# проверки и предупреждениями о неработающих площадках.
 _KEYBOARDS = {
-    "sources": sources_keyboard,
     "categories": categories_keyboard,
     "keywords": keywords_keyboard,
     "budget": budget_keyboard,
@@ -66,16 +69,66 @@ _KEYBOARDS = {
 
 
 def render_step(
-    step: str, settings: UserSettings, ctx: str = CTX_WIZARD
+    step: str,
+    settings: UserSettings,
+    ctx: str = CTX_WIZARD,
+    *,
+    active: set[str] | None = None,
+    blocked: set[str] | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Экран выбора одного фильтра."""
+    """Экран выбора одного фильтра.
+
+    Args:
+        active: Биржи, которые опрашиваются прямо сейчас (от супервизора
+            парсеров). Нужны только экрану «Биржи»: по ним видно, что включённая
+            площадка не поднялась, и чего ей не хватает.
+        blocked: Биржи, запрещённые владельцем в ``settings.yaml``.
+    """
     title = _STEP_TITLES[step]
     if ctx == CTX_WIZARD:
         number = WIZARD_STEPS.index(step) + 1
         header = f"<b>Шаг {number}/{len(WIZARD_STEPS)} — {title}</b>"
     else:
         header = f"<b>{title}</b>"
-    return f"{header}\n\n{_STEP_HINTS[step]}", _KEYBOARDS[step](settings, ctx)
+
+    body = _STEP_HINTS[step]
+    if step == "sources":
+        # Проверку «сейчас» показываем только в настройках: в мастере проверять
+        # ещё нечего, фильтры не сохранены.
+        keyboard = sources_keyboard(settings, ctx, with_poll=ctx != CTX_WIZARD)
+        warning = _sources_warning(settings, active, blocked or set())
+        if warning:
+            body = f"{body}\n\n{warning}"
+    else:
+        keyboard = _KEYBOARDS[step](settings, ctx)
+    return f"{header}\n\n{body}", keyboard
+
+
+def _sources_warning(
+    settings: UserSettings, active: set[str] | None, blocked: set[str]
+) -> str:
+    """Предупреждение о биржах, которые включены, но не опрашиваются.
+
+    Молчаливо неработающий источник — худший из возможных: человек ждёт лидов,
+    которых не будет. Поэтому пишем прямо, чего не хватает.
+    """
+    if active is None:
+        return ""
+
+    lines: list[str] = []
+    for source in SOURCES:
+        if not source.available or not settings.source_enabled(source.id):
+            continue
+        if source.id in active:
+            continue
+        if source.id in blocked:
+            reason = "выключена владельцем в settings.yaml"
+        elif source.needs:
+            reason = f"нужен <code>{escape(source.needs)}</code> в .env"
+        else:
+            reason = "парсер не запущен"
+        lines.append(f"⚠️ {escape(source.label)}: опрос не идёт — {reason}")
+    return "\n".join(lines)
 
 
 def render_wizard_intro() -> str:
