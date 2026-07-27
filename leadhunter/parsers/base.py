@@ -9,6 +9,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import logging
+from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 from core.models import Order
@@ -17,6 +18,10 @@ if TYPE_CHECKING:
     from bot.alerts import Alerter
 
 log = logging.getLogger(__name__)
+
+# Сколько ключей лидов держим в памяти на парсер. Одна страница биржи — это
+# десятки записей, так что окна в несколько тысяч хватает с большим запасом.
+SEEN_LIMIT = 5000
 
 
 class BaseParser(abc.ABC):
@@ -34,7 +39,12 @@ class BaseParser(abc.ABC):
         # Ключи уже отданных за эту сессию лидов — чтобы не заваливать очередь
         # одними и теми же записями на каждом опросе фида (дедуп по БД идёт дальше,
         # но он молчаливый и всё равно гоняет их через очередь впустую).
-        self._seen: set[str] = set()
+        #
+        # Набор ОГРАНИЧЕН: раньше это было обычное множество, которое росло всё
+        # время работы процесса. На VPS с аптаймом в месяцы это медленная утечка
+        # памяти. Держим окно последних ключей — старые лиды всё равно отсеются
+        # дедупом по базе.
+        self._seen: OrderedDict[str, None] = OrderedDict()
 
     async def emit(self, order: Order) -> bool:
         """Публикует заказ в очередь обработки.
@@ -44,8 +54,14 @@ class BaseParser(abc.ABC):
             сессии и повторно не публикуется.
         """
         if order.dedup_key in self._seen:
+            # Двигаем в конец: активно повторяющиеся лиды не вытесняются.
+            self._seen.move_to_end(order.dedup_key)
             return False
-        self._seen.add(order.dedup_key)
+
+        self._seen[order.dedup_key] = None
+        while len(self._seen) > SEEN_LIMIT:
+            self._seen.popitem(last=False)
+
         await self._queue.put(order)
         log.debug("[%s] emit %s", self.name, order.dedup_key)
         return True

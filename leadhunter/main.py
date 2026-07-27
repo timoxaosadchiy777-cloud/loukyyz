@@ -192,12 +192,14 @@ async def handle_order(
 
 
 async def load_recipients(db: Database, owner_id: int) -> list[Recipient]:
-    """Владелец плюс все пользователи с доступом, каждый со своими фильтрами."""
-    user_ids = await db.list_active_user_ids()
-    if owner_id:
-        # Владелец первым и без дубля, даже если он же есть в users.
-        user_ids = [owner_id] + [uid for uid in user_ids if uid != owner_id]
-    return [Recipient(uid, await db.get_user_settings(uid)) for uid in user_ids]
+    """Владелец плюс все пользователи с доступом, каждый со своими фильтрами.
+
+    Один запрос на лид, а не 1+N: выборка с JOIN живёт в Database.
+    """
+    return [
+        Recipient(telegram_id, settings)
+        for telegram_id, settings in await db.list_recipients(owner_id)
+    ]
 
 
 async def deliver(
@@ -322,20 +324,27 @@ async def main() -> None:
             asyncio.create_task(parser.run_safe(), name=f"parser:{parser.name}")
             for parser in parsers
         ],
-        asyncio.create_task(
-            process_orders(
-                queue,
-                db=db,
-                scorer=scorer,
-                responder=responder,
-                llm=llm,
-                bot=bot,
-                alerter=alerter,
-                settings=settings,
-                config=config,
-            ),
-            name="processor",
-        ),
+        *[
+            # Несколько потребителей очереди: пока один ждёт ответа модели,
+            # остальные разбирают следующие лиды. Записи в SQLite всё равно
+            # сериализуются, а INSERT OR IGNORE делает гонку дедупликации
+            # безопасной, поэтому параллелизм тут выигрышный.
+            asyncio.create_task(
+                process_orders(
+                    queue,
+                    db=db,
+                    scorer=scorer,
+                    responder=responder,
+                    llm=llm,
+                    bot=bot,
+                    alerter=alerter,
+                    settings=settings,
+                    config=config,
+                ),
+                name=f"processor-{index}",
+            )
+            for index in range(max(1, settings.pipeline_workers))
+        ],
     ]
 
     stop = asyncio.Event()

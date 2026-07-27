@@ -130,6 +130,9 @@ class Settings(BaseSettings):
     # Очередь ограничена намеренно: если ИИ тормозит, парсеры притормозят вместе
     # с ним, а не будут набивать память лидами до OOM.
     queue_maxsize: int = Field(1000, alias="QUEUE_MAXSIZE")
+    # Сколько лидов обрабатываем параллельно. Больше — быстрее разбирается
+    # очередь, но выше нагрузка на ИИ-провайдер (и его лимиты).
+    pipeline_workers: int = Field(2, alias="PIPELINE_WORKERS")
 
     @field_validator("feeds", mode="before")
     @classmethod

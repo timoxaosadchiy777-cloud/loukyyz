@@ -83,3 +83,82 @@ def test_unwritable_log_file_falls_back_to_stdout(tmp_path) -> None:
     setup_logging("INFO", log_file=blocker / "app.log")
     assert logging.getLogger().handlers  # консольный хендлер на месте
     setup_logging("INFO")
+
+
+# --- Производительность и память ------------------------------------------
+
+
+async def test_recipients_load_in_single_query(tmp_path) -> None:
+    """Раньше было 1+N запросов НА КАЖДЫЙ лид — при 50 юзерах это тысячи."""
+    from core.user_settings import UserSettings
+    from database.db import Database
+
+    db = Database(str(tmp_path / "r.db"))
+    await db.connect()
+    try:
+        for uid in (201, 202, 203):
+            await db.set_paid_status(uid, True)
+        await db.save_user_settings(202, UserSettings(min_budget=300, onboarded=True))
+
+        recipients = await db.list_recipients(owner_id=100)
+        assert [uid for uid, _ in recipients] == [100, 201, 202, 203]
+        by_id = dict(recipients)
+        assert by_id[202].min_budget == 300
+        assert by_id[201] == UserSettings()  # LEFT JOIN без настроек
+    finally:
+        await db.close()
+
+
+async def test_owner_not_duplicated_in_recipients(tmp_path) -> None:
+    from database.db import Database
+
+    db = Database(str(tmp_path / "r2.db"))
+    await db.connect()
+    try:
+        await db.set_paid_status(100, True)
+        recipients = await db.list_recipients(owner_id=100)
+        assert [uid for uid, _ in recipients] == [100]
+    finally:
+        await db.close()
+
+
+async def test_wal_mode_enabled(tmp_path) -> None:
+    """Без WAL нажатие кнопки могло словить «database is locked»."""
+    from database.db import Database
+
+    db = Database(str(tmp_path / "w.db"))
+    await db.connect()
+    try:
+        cur = await db._connection.execute("PRAGMA journal_mode")
+        assert (await cur.fetchone())[0].lower() == "wal"
+    finally:
+        await db.close()
+
+
+async def test_seen_set_is_bounded() -> None:
+    """Множество виденных лидов росло вечно — утечка при аптайме в месяцы."""
+    import asyncio
+
+    from core.models import Order
+    from parsers.base import SEEN_LIMIT, BaseParser
+
+    class _P(BaseParser):
+        name = "t"
+
+        async def run(self) -> None:
+            pass
+
+    queue: asyncio.Queue = asyncio.Queue()
+    parser = _P(queue)
+    for i in range(SEEN_LIMIT + 200):
+        await parser.emit(
+            Order(source="s", external_id=str(i), title="t", url="u", description="d")
+        )
+        queue.get_nowait()
+
+    assert len(parser._seen) == SEEN_LIMIT
+    # Свежий ключ всё ещё отсекается — окно работает как надо.
+    repeat = Order(
+        source="s", external_id=str(SEEN_LIMIT + 199), title="t", url="u", description="d"
+    )
+    assert await parser.emit(repeat) is False

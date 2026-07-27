@@ -32,6 +32,24 @@ def _pack(values: tuple[str, ...]) -> str:
 def _unpack(raw: str | None) -> tuple[str, ...]:
     return tuple(part for part in (raw or "").split(",") if part)
 
+def _settings_from_row(row) -> UserSettings:
+    """Собирает UserSettings из строки user_settings (или из LEFT JOIN с NULL)."""
+    try:
+        onboarded = row["onboarded"]
+    except (IndexError, KeyError):
+        onboarded = 0
+    if onboarded is None:
+        # LEFT JOIN без совпадения: пользователь ещё не настраивался.
+        return UserSettings()
+    return UserSettings(
+        sources=_unpack(row["sources"]),
+        categories=_unpack(row["categories"]),
+        keywords=_unpack(row["keywords"]),
+        min_budget=row["min_budget"] or 0,
+        onboarded=bool(onboarded),
+    )
+
+
 # Таблица создаётся первой. Индексы — отдельно и ПОСЛЕ миграции колонок: на
 # старой БД колонки crm_status ещё нет, и индекс по ней нельзя создавать до ALTER.
 _SCHEMA = """
@@ -152,6 +170,7 @@ class Database:
     async def connect(self) -> None:
         self._conn = await aiosqlite.connect(self._path)
         self._conn.row_factory = aiosqlite.Row
+        await self._apply_pragmas()
         await self._conn.executescript(_SCHEMA)
         await self._conn.executescript(_USERS_SCHEMA)  # появляется и на старых БД
         await self._conn.executescript(_USER_SETTINGS_SCHEMA)
@@ -160,6 +179,26 @@ class Database:
         await self._conn.executescript(_INDEXES)  # индексы — уже по всем колонкам
         await self._conn.commit()
         log.info("SQLite подключена: %s", self._path)
+
+    async def _apply_pragmas(self) -> None:
+        """Режим работы SQLite под нагрузкой бота.
+
+        WAL: читатели (хендлеры кнопок) не блокируют писателя (пайплайн) — без
+        него нажатие в Telegram могло словить «database is locked» во время
+        сохранения лида. busy_timeout добивает редкие пересечения ожиданием
+        вместо ошибки. synchronous=NORMAL безопасен при WAL и заметно экономит
+        обращения к диску VPS.
+        """
+        for pragma in (
+            "PRAGMA journal_mode=WAL",
+            "PRAGMA busy_timeout=5000",
+            "PRAGMA synchronous=NORMAL",
+            "PRAGMA foreign_keys=ON",
+        ):
+            try:
+                await self._connection.execute(pragma)
+            except Exception as exc:  # noqa: BLE001 — на экзотической ФС WAL может быть недоступен
+                log.warning("Не применился %s: %s", pragma, exc)
 
     async def _migrate(self) -> None:
         """Идемпотентно добавляет недостающие колонки в существующие таблицы."""
@@ -437,15 +476,7 @@ class Database:
             "SELECT * FROM user_settings WHERE telegram_id = ?", (telegram_id,)
         )
         row = await cur.fetchone()
-        if row is None:
-            return UserSettings()
-        return UserSettings(
-            sources=_unpack(row["sources"]),
-            categories=_unpack(row["categories"]),
-            keywords=_unpack(row["keywords"]),
-            min_budget=row["min_budget"],
-            onboarded=bool(row["onboarded"]),
-        )
+        return UserSettings() if row is None else _settings_from_row(row)
 
     async def save_user_settings(
         self, telegram_id: int, settings: UserSettings
@@ -582,6 +613,35 @@ class Database:
     ) -> list[aiosqlite.Row]:
         """Сохранённые лиды пользователя, свежие сверху."""
         return await self.list_leads_by_state(telegram_id, LeadState.SAVED, limit)
+
+    async def list_recipients(self, owner_id: int = 0) -> list[tuple[int, UserSettings]]:
+        """Получатели лидов вместе с фильтрами — ОДНИМ запросом.
+
+        Раньше это было ``list_active_user_ids()`` плюс ``get_user_settings()``
+        на каждого, то есть 1+N запросов НА КАЖДЫЙ лид: при 50 пользователях и
+        25 лидах за опрос — больше тысячи обращений к базе на ровном месте.
+
+        Владелец идёт первым и без дубля: его доступ не хранится в users, а
+        фильтров у него обычно нет — дефолтные пропускают всё.
+        """
+        cur = await self._connection.execute(
+            """
+            SELECT u.telegram_id, s.sources, s.categories, s.keywords,
+                   s.min_budget, s.onboarded
+            FROM users u
+            LEFT JOIN user_settings s ON s.telegram_id = u.telegram_id
+            WHERE u.paid_status = 1
+            ORDER BY u.telegram_id
+            """
+        )
+        recipients = [(row["telegram_id"], _settings_from_row(row))
+                      for row in await cur.fetchall()]
+
+        if owner_id:
+            others = [item for item in recipients if item[0] != owner_id]
+            owner_settings = await self.get_user_settings(owner_id)
+            recipients = [(owner_id, owner_settings), *others]
+        return recipients
 
     async def list_active_user_ids(self) -> list[int]:
         """Кому рассылать лиды: все пользователи с доступом.
