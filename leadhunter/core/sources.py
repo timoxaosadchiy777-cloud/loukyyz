@@ -34,6 +34,8 @@ class Source:
     label: str
     available: bool = True
     factory: str = ""
+    default_enabled: bool = True
+    note: str = ""
 
     @property
     def button_label(self) -> str:
@@ -45,12 +47,54 @@ class Source:
 # Всё остальное — мастер настройки, фильтры, меню «Биржи», валидация
 # settings.yaml — подхватит её автоматически.
 SOURCES: tuple[Source, ...] = (
-    Source("upwork", "💼 Upwork"),
-    Source("fiverr", "🛒 Fiverr"),
-    Source("rss", "🌐 RSS / джоб-борды", factory="parsers.rss_parser:build"),
-    Source("kwork", "🇷🇺 Kwork", factory="parsers.kwork_parser:build"),
-    Source("kwork_com", "🌍 Kwork.com", factory="parsers.kwork_parser:build"),
+    # --- Биржи с собственным парсером ---
+    Source(
+        "kwork", "🇷🇺 Kwork.ru",
+        factory="parsers.kwork_parser:build",
+    ),
+    Source(
+        "kwork_com", "🌍 Kwork.com",
+        factory="parsers.kwork_parser:build",
+    ),
+    Source(
+        "freelancer", "🌐 Freelancer.com",
+        factory="parsers.freelancer_parser:build",
+    ),
+    Source(
+        "peopleperhour", "🇬🇧 PeoplePerHour",
+        factory="parsers.pph_parser:build",
+    ),
+    Source(
+        "guru", "🎯 Guru.com",
+        factory="parsers.guru_parser:build",
+    ),
+
+    # --- RSS: вспомогательный источник, а не основной ---
+    # По умолчанию выключен: лента отдаёт вакансии в штат, а не заказы, и
+    # забивает выдачу. Включается осознанно.
+    Source(
+        "weworkremotely", "📰 WeWorkRemotely (RSS)",
+        factory="parsers.rss_parser:build",
+        default_enabled=False,
+        note="джоб-борд: вакансии в штат, не разовые заказы",
+    ),
+
+    # --- Площадки без публичного доступа к заказам ---
+    # Не заглушки: парсера нет, потому что парсить нечего.
+    Source(
+        "upwork", "💼 Upwork", available=False,
+        note="закрыл RSS saved-search в 2023, публичного API на поиск заказов нет",
+    ),
+    Source(
+        "fiverr", "🛒 Fiverr", available=False,
+        note="витрина гигов; раздел Buyer Requests закрыт в 2023",
+    ),
 )
+
+
+def default_enabled_ids() -> tuple[str, ...]:
+    """Источники, включённые у нового пользователя по умолчанию."""
+    return tuple(s.id for s in SOURCES if s.available and s.default_enabled)
 
 # Источники с рабочим парсером. Именно они допустимы в settings.yaml и в
 # пользовательских фильтрах.

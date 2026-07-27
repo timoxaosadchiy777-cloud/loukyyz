@@ -69,12 +69,19 @@ class UserSettings:
     keywords: tuple[str, ...] = field(default_factory=tuple)
     min_budget: int = 0
     onboarded: bool = False
+    # True — список бирж пришёл из sources_settings и уже учитывает дефолты
+    # реестра. Тогда пустой список значит «выключено всё», а не «включено всё».
+    sources_explicit: bool = False
 
     # --- Предикаты фильтрации ---------------------------------------------
 
     def source_enabled(self, source: str) -> bool:
-        """Разрешена ли биржа (пустой выбор = разрешены все доступные)."""
-        if not self.sources:
+        """Разрешена ли биржа.
+
+        Пустой список означает «все» только когда выбор ещё не загружен из
+        sources_settings: там пустой список — это осознанно выключенные биржи.
+        """
+        if not self.sources and not self.sources_explicit:
             return True
         return source in self.sources
 
@@ -175,6 +182,7 @@ class UserSettings:
             "keywords": self.keywords,
             "min_budget": self.min_budget,
             "onboarded": self.onboarded,
+            "sources_explicit": self.sources_explicit,
         }
         data.update(changes)
         return UserSettings(**data)

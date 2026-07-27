@@ -93,7 +93,7 @@ async def test_paid_user_cannot_read_foreign_lead(bot_db, access, cq, rec, fsm) 
     from tests.helpers import USER
 
     order_id = await bot_db.save_order(
-        Order(source="rss", external_id="secret", title="Чужой лид",
+        Order(source="freelancer", external_id="secret", title="Чужой лид",
               url="u", description="d"),
         response="секретный отклик",
         status="new",
@@ -114,7 +114,7 @@ async def test_delivered_lead_is_readable(bot_db, access, cq, rec, fsm) -> None:
     from tests.helpers import USER
 
     order_id = await bot_db.save_order(
-        Order(source="rss", external_id="mine", title="Мой лид", url="u", description="d"),
+        Order(source="freelancer", external_id="mine", title="Мой лид", url="u", description="d"),
         response="мой отклик",
         status="new",
     )

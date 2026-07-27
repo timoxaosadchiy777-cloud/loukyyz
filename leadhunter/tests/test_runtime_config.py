@@ -20,12 +20,12 @@ def test_autocreate_and_defaults(tmp_path) -> None:
 
 def test_reads_existing_values(tmp_path) -> None:
     path = tmp_path / "settings.yaml"
-    path.write_text("min_score: 75\nmin_budget: 120\nenabled_sources: [upwork]\n", encoding="utf-8")
+    path.write_text("min_score: 75\nmin_budget: 120\nenabled_sources: [kwork]\n", encoding="utf-8")
     store = RuntimeConfigStore(path, defaults=RuntimeConfig())
     cfg = store.current()
     assert cfg.min_score == 75
     assert cfg.min_budget == 120
-    assert cfg.enabled_sources == ("upwork",)
+    assert cfg.enabled_sources == ("kwork",)
 
 
 def test_hot_reload_on_change(tmp_path) -> None:
@@ -60,9 +60,9 @@ def test_min_score_clamped(tmp_path) -> None:
 
 def test_unknown_source_dropped(tmp_path) -> None:
     path = tmp_path / "settings.yaml"
-    path.write_text("enabled_sources: [upwork, telegram, rss]\n", encoding="utf-8")
+    path.write_text("enabled_sources: [kwork, telegram, guru]\n", encoding="utf-8")
     store = RuntimeConfigStore(path, defaults=RuntimeConfig())
-    assert store.current().enabled_sources == ("upwork", "rss")
+    assert store.current().enabled_sources == ("kwork", "guru")
 
 
 def test_broken_yaml_keeps_defaults(tmp_path) -> None:

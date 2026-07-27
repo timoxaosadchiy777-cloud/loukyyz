@@ -108,6 +108,27 @@ class Settings(BaseSettings):
     kwork_pages: int = Field(1, alias="KWORK_PAGES")
     kwork_timeout: float = Field(20.0, alias="KWORK_TIMEOUT")
 
+    # --- Прочие биржи ---
+    # Freelancer.com — единственная с официальным публичным API (ключ не нужен).
+    freelancer_enabled: bool = Field(True, alias="FREELANCER_ENABLED")
+    freelancer_url: str = Field("https://www.freelancer.com", alias="FREELANCER_URL")
+
+    pph_enabled: bool = Field(True, alias="PPH_ENABLED")
+    pph_url: str = Field("https://www.peopleperhour.com", alias="PPH_URL")
+    pph_cookie: str = Field("", alias="PPH_COOKIE")
+
+    guru_enabled: bool = Field(True, alias="GURU_ENABLED")
+    guru_url: str = Field("https://www.guru.com", alias="GURU_URL")
+    guru_cookie: str = Field("", alias="GURU_COOKIE")
+
+    # Общие параметры опроса бирж.
+    source_poll_interval: int = Field(300, alias="SOURCE_POLL_INTERVAL")
+    source_pages: int = Field(1, alias="SOURCE_PAGES")
+    source_timeout: float = Field(20.0, alias="SOURCE_TIMEOUT")
+    # Лиды старше этого возраста не доходят до пайплайна: на бирже под ними уже
+    # сотня откликов. 0 = отсечка выключена.
+    max_lead_age_hours: int = Field(24, alias="MAX_LEAD_AGE_HOURS")
+
     # Курс для приведения рублёвых бюджетов к порогу в долларах. Приблизительный:
     # нужен только для отсечки, в карточке всегда показана исходная сумма.
     usd_rub_rate: float = Field(95.0, alias="USD_RUB_RATE")

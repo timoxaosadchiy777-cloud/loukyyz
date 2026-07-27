@@ -148,8 +148,12 @@ async def on_toggle(
     kind = callback_data.kind
 
     if kind == "src":
-        updated = settings.toggled_source(callback_data.value)
-        step = "sources"
+        # Источники хранятся отдельной таблицей: пишем туда и перечитываем.
+        await db.toggle_source(query.from_user.id, callback_data.value)
+        updated = await db.get_user_settings(query.from_user.id)
+        await _rerender(query, "sources", updated, callback_data.ctx)
+        await query.answer()
+        return
     elif kind == "cat":
         category = _index(callback_data.value, CATEGORIES)
         if category is None:

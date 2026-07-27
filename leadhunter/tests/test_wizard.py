@@ -25,7 +25,7 @@ async def test_start_launches_wizard_for_new_user(msg, bot_db, access, rec, fsm)
 
     assert rec.has("Настроим бота под тебя")
     assert rec.has("Шаг 1/4")
-    assert "🌐 RSS / джоб-борды" in " ".join(labels(rec.last_markup))
+    assert "Kwork" in " ".join(labels(rec.last_markup))
 
 
 async def test_start_shows_menu_for_onboarded_user(msg, bot_db, access, rec, fsm) -> None:
@@ -67,23 +67,22 @@ async def test_planned_source_reports_soon(cq, rec) -> None:
 
 async def test_toggle_source_persists_and_redraws(cq, bot_db, access, rec) -> None:
     await on_toggle(
-        cq(), ToggleAction(kind="src", value="rss", ctx=CTX_WIZARD), bot_db, access
+        cq(), ToggleAction(kind="src", value="kwork", ctx=CTX_WIZARD), bot_db, access
     )
 
-    # Первое выключение = «все, кроме этой».
-    assert (await bot_db.get_user_settings(USER)).sources == (
-        "upwork", "fiverr", "kwork", "kwork_com",
-    )
-    assert any("▫️ 🌐 RSS" in text for text in labels(rec.last_markup))
+    # Выбор ушёл в sources_settings: биржа выключена, остальные на месте.
+    sources = (await bot_db.get_user_settings(USER)).sources
+    assert "kwork" not in sources
+    assert "freelancer" in sources
 
 
 async def test_toggle_source_twice_returns_it(cq, bot_db, access) -> None:
     for _ in range(2):
         await on_toggle(
-            cq(), ToggleAction(kind="src", value="rss", ctx=CTX_WIZARD), bot_db, access
+            cq(), ToggleAction(kind="src", value="kwork", ctx=CTX_WIZARD), bot_db, access
         )
     settings = await bot_db.get_user_settings(USER)
-    assert settings.source_enabled("rss") is True
+    assert settings.source_enabled("kwork") is True
 
 
 # --- Категории и ключевые слова ------------------------------------------
@@ -204,7 +203,7 @@ async def test_custom_keywords_merge_with_presets(msg, bot_db, access, fsm) -> N
 
 async def test_settings_context_offers_return_to_settings(cq, bot_db, access, rec) -> None:
     await on_toggle(
-        cq(), ToggleAction(kind="src", value="rss", ctx=CTX_SETTINGS), bot_db, access
+        cq(), ToggleAction(kind="src", value="kwork", ctx=CTX_SETTINGS), bot_db, access
     )
     assert "◀️ К настройкам" in labels(rec.last_markup)
     assert "Далее ▶️" not in labels(rec.last_markup)
@@ -212,7 +211,7 @@ async def test_settings_context_offers_return_to_settings(cq, bot_db, access, re
 
 async def test_wizard_context_offers_next(cq, bot_db, access, rec) -> None:
     await on_toggle(
-        cq(), ToggleAction(kind="src", value="rss", ctx=CTX_WIZARD), bot_db, access
+        cq(), ToggleAction(kind="src", value="kwork", ctx=CTX_WIZARD), bot_db, access
     )
     assert "Далее ▶️" in labels(rec.last_markup)
 
@@ -233,7 +232,7 @@ async def test_wizard_denies_user_without_access(cq, bot_db, access, fsm, rec) -
     )
     await on_toggle(
         cq(STRANGER),
-        ToggleAction(kind="src", value="rss", ctx=CTX_WIZARD),
+        ToggleAction(kind="src", value="kwork", ctx=CTX_WIZARD),
         bot_db,
         access,
     )
@@ -242,7 +241,10 @@ async def test_wizard_denies_user_without_access(cq, bot_db, access, fsm, rec) -
     )
 
     assert rec.alerts == [texts.ERR_NO_ACCESS] * 3
-    assert (await bot_db.get_user_settings(STRANGER)) == UserSettings()
+    stranger = await bot_db.get_user_settings(STRANGER)
+    assert stranger.keywords == ()
+    assert stranger.min_budget == 0
+    assert stranger.onboarded is False
 
 
 async def test_start_cancels_pending_keyword_input(msg, bot_db, access, fsm, rec) -> None:

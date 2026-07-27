@@ -15,7 +15,7 @@ OTHER = 777
 
 def _order(**kwargs) -> Order:
     base = dict(
-        source="rss",
+        source="freelancer",
         external_id="1",
         title="Telegram бот",
         url="https://example.com/1",

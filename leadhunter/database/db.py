@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from core.models import CrmStatus, LeadState, Order
+from core.sources import SOURCES
 from core.user_settings import UserSettings
 
 log = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS orders (
     budget_raw    TEXT,
     budget_value  INTEGER,
     budget_currency TEXT NOT NULL DEFAULT 'USD',
+    published_at  TEXT NOT NULL DEFAULT '',
     response      TEXT,
     status              TEXT    NOT NULL DEFAULT 'new',
     score               INTEGER,
@@ -123,6 +125,22 @@ CREATE TABLE IF NOT EXISTS lead_deliveries (
 );
 """
 
+# Включённые источники — по строке на пару (пользователь, биржа).
+#
+# Отдельная таблица, а не список в user_settings: там пустой список означал
+# «все включены», и выразить «эта биржа выключена ПО УМОЛЧАНИЮ» было нечем.
+# Здесь состояние трёхзначное: строка есть → явный выбор пользователя,
+# строки нет → берём default_enabled из реестра источников.
+_SOURCES_SETTINGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sources_settings (
+    telegram_user_id INTEGER NOT NULL,
+    source           TEXT    NOT NULL,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    updated_at       TEXT    NOT NULL,
+    PRIMARY KEY (telegram_user_id, source)
+);
+"""
+
 _INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_orders_source_ext ON orders(source, external_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status     ON orders(status);
@@ -145,6 +163,8 @@ _MIGRATIONS: dict[str, str] = {
     "summary": "TEXT NOT NULL DEFAULT ''",
     # Валюта исходного бюджета; budget_value всегда нормализован в USD.
     "budget_currency": "TEXT NOT NULL DEFAULT 'USD'",
+    # Дата публикации на бирже — по ней отсекаются устаревшие лиды.
+    "published_at": "TEXT NOT NULL DEFAULT ''",
 }
 
 # Колонки users, добавленные после первого релиза мультиюзера.
@@ -175,6 +195,7 @@ class Database:
         await self._conn.executescript(_USERS_SCHEMA)  # появляется и на старых БД
         await self._conn.executescript(_USER_SETTINGS_SCHEMA)
         await self._conn.executescript(_DELIVERIES_SCHEMA)
+        await self._conn.executescript(_SOURCES_SETTINGS_SCHEMA)
         await self._migrate()  # добавляет недостающие колонки (в т.ч. crm_status)
         await self._conn.executescript(_INDEXES)  # индексы — уже по всем колонкам
         await self._conn.commit()
@@ -205,6 +226,7 @@ class Database:
         await self._add_columns("orders", _MIGRATIONS)
         await self._add_columns("users", _USER_MIGRATIONS)
         await self._migrate_saved_leads()
+        await self._migrate_sources()
 
     async def _add_columns(self, table: str, migrations: dict[str, str]) -> None:
         cur = await self._connection.execute(f"PRAGMA table_info({table})")
@@ -266,10 +288,11 @@ class Database:
             """
             INSERT OR IGNORE INTO orders
                 (source, external_id, title, url, description,
-                 budget_raw, budget_value, budget_currency, response, status,
+                 budget_raw, budget_value, budget_currency, published_at,
+                 response, status,
                  score, category, reason, probability_of_sale,
                  should_send, technology, summary, crm_status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 order.source,
@@ -280,6 +303,7 @@ class Database:
                 order.budget_raw,
                 order.budget_value,
                 order.budget_currency,
+                order.published_at.isoformat() if order.published_at else "",
                 response,
                 status,
                 order.score,
@@ -484,7 +508,11 @@ class Database:
             "SELECT * FROM user_settings WHERE telegram_id = ?", (telegram_id,)
         )
         row = await cur.fetchone()
-        return UserSettings() if row is None else _settings_from_row(row)
+        base = UserSettings() if row is None else _settings_from_row(row)
+        # Источники живут в отдельной таблице — подставляем разрешённый список.
+        return base.replace(
+            sources=await self.get_enabled_sources(telegram_id), sources_explicit=True
+        )
 
     async def save_user_settings(
         self, telegram_id: int, settings: UserSettings
@@ -642,14 +670,104 @@ class Database:
             ORDER BY u.telegram_id
             """
         )
-        recipients = [(row["telegram_id"], _settings_from_row(row))
-                      for row in await cur.fetchall()]
+        recipients = []
+        for row in await cur.fetchall():
+            settings = _settings_from_row(row)
+            recipients.append((
+                row["telegram_id"],
+                settings.replace(
+                    sources=await self.get_enabled_sources(row["telegram_id"]),
+                    sources_explicit=True,
+                ),
+            ))
 
         if owner_id:
             others = [item for item in recipients if item[0] != owner_id]
             owner_settings = await self.get_user_settings(owner_id)
             recipients = [(owner_id, owner_settings), *others]
         return recipients
+
+    # ------------------------------------------------------------------
+    # Источники лидов, включённые пользователем
+    # ------------------------------------------------------------------
+
+    async def get_enabled_sources(self, telegram_id: int) -> tuple[str, ...]:
+        """Какие биржи включены у пользователя.
+
+        Явный выбор берётся из ``sources_settings``; для бирж, которых там нет,
+        применяется ``default_enabled`` из реестра. Так новая площадка
+        появляется у всех сама, а осознанно выключенная остаётся выключенной.
+        """
+        cur = await self._connection.execute(
+            "SELECT source, enabled FROM sources_settings WHERE telegram_user_id = ?",
+            (telegram_id,),
+        )
+        chosen = {row["source"]: bool(row["enabled"]) for row in await cur.fetchall()}
+
+        return tuple(
+            source.id
+            for source in SOURCES
+            if source.available and chosen.get(source.id, source.default_enabled)
+        )
+
+    async def set_source_enabled(
+        self, telegram_id: int, source: str, enabled: bool
+    ) -> None:
+        await self._connection.execute(
+            """
+            INSERT INTO sources_settings (telegram_user_id, source, enabled, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(telegram_user_id, source) DO UPDATE SET
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at
+            """,
+            (telegram_id, source, int(enabled), _utcnow_iso()),
+        )
+        await self._connection.commit()
+
+    async def toggle_source(self, telegram_id: int, source: str) -> bool:
+        """Переключает биржу. Возвращает новое состояние."""
+        enabled = source in await self.get_enabled_sources(telegram_id)
+        await self.set_source_enabled(telegram_id, source, not enabled)
+        return not enabled
+
+    async def _migrate_sources(self) -> None:
+        """Переносит выбор бирж из user_settings.sources в отдельную таблицу.
+
+        Старый формат — CSV, где пустая строка означала «все включены».
+        Переносим только непустой выбор: он был осознанным.
+        """
+        cur = await self._connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='user_settings'"
+        )
+        if await cur.fetchone() is None:
+            return
+
+        cur = await self._connection.execute(
+            "SELECT telegram_id, sources FROM user_settings WHERE sources != ''"
+        )
+        rows = list(await cur.fetchall())
+        if not rows:
+            return
+
+        moved = 0
+        for row in rows:
+            picked = set(_unpack(row["sources"]))
+            for source in SOURCES:
+                if not source.available:
+                    continue
+                cur = await self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO sources_settings
+                        (telegram_user_id, source, enabled, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (row["telegram_id"], source.id, int(source.id in picked), _utcnow_iso()),
+                )
+                moved += cur.rowcount
+        if moved:
+            await self._connection.commit()
+            log.info("Миграция БД: перенесён выбор бирж (%s записей)", moved)
 
     async def list_active_user_ids(self) -> list[int]:
         """Кому рассылать лиды: все пользователи с доступом.

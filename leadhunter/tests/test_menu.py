@@ -21,7 +21,7 @@ MENU_BUTTONS = [
 
 def _order(external_id="1", **kwargs) -> Order:
     base = dict(
-        source="rss",
+        source="freelancer",
         external_id=external_id,
         title="Telegram бот на Python",
         url="https://example.com/1",

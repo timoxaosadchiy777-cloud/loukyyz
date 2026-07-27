@@ -30,6 +30,7 @@ from config import Settings, get_settings
 from core.decision import apply_score, decide
 from core.fanout import Recipient, prefilter, select
 from core.filters import parse_budget
+from core.freshness import age_hours, is_fresh
 from core.health import Heartbeat
 from core.logging import setup_logging
 from core.models import CrmStatus, Order
@@ -81,6 +82,16 @@ async def handle_order(
     # описания — иначе случайные числа в тексте вакансии дадут ложный фильтр.
     if order.budget_value is None and order.budget_raw:
         order.budget_value = parse_budget(order.budget_raw)
+
+    # 0.5. Отсечка устаревших лидов. Парсеры фильтруют сами, но RSS и любой
+    #      будущий источник могут отдать старьё — проверяем ещё раз здесь.
+    if not is_fresh(order, max_age_hours=settings.max_lead_age_hours):
+        hours = age_hours(order)
+        log.info(
+            "Пропуск %s: опубликован %.0f ч назад (лимит %s ч)",
+            order.dedup_key, hours or 0, settings.max_lead_age_hours,
+        )
+        return
 
     # 1. Дедупликация по источнику + external_id.
     if await db.is_duplicate(order.source, order.external_id):

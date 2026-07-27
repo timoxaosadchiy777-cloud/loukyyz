@@ -13,7 +13,7 @@ def _service(reply):
 
 def _order() -> Order:
     return Order(
-        source="rss",
+        source="freelancer",
         external_id="1",
         title="Нужен Telegram бот",
         url="https://example.com/1",

@@ -25,7 +25,7 @@ BOB = 202
 
 def _order(external_id: str = "1", **kwargs) -> Order:
     base = dict(
-        source="rss",
+        source="freelancer",
         external_id=external_id,
         title="Нужен Telegram бот на Python",
         url="https://example.com/1",
@@ -126,6 +126,7 @@ class _FakeBot:
 
 class _Settings:
     owner_id = OWNER
+    max_lead_age_hours = 0   # в тестах отсечку по возрасту не применяем
 
 
 def _score(score: int = 90, **kwargs) -> LeadScore:
@@ -302,11 +303,12 @@ async def test_manual_mode_falls_back_to_prefilter(db, config) -> None:
 
 
 async def test_disabled_source_skips_everything(db, config) -> None:
+    """Биржа выключена в sources_settings — лид с неё до ИИ не доходит."""
     await db.set_paid_status(ALICE, True)
-    await db.save_user_settings(ALICE, UserSettings(sources=("upwork",)))
-    await db.save_user_settings(OWNER, UserSettings(sources=("upwork",)))
+    for uid in (OWNER, ALICE):
+        await db.set_source_enabled(uid, "freelancer", False)
 
-    scorer, _, bot = await _run(db, config, _order(source="rss"))
+    scorer, _, bot = await _run(db, config, _order(source="freelancer"))
     assert scorer.calls == 0
     assert bot.sent == []
 
@@ -366,6 +368,7 @@ async def test_recipients_carry_their_own_settings(db) -> None:
 async def test_no_recipients_at_all(db, config) -> None:
     class _NoOwner:
         owner_id = 0
+        max_lead_age_hours = 0
 
     order = _order()
     await handle_order(

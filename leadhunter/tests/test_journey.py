@@ -83,6 +83,7 @@ class _PushBot:
 
 class _Settings:
     owner_id = OWNER
+    max_lead_age_hours = 0   # в тестах отсечку по возрасту не применяем
 
 
 @pytest_asyncio.fixture
@@ -110,7 +111,7 @@ def config(tmp_path):
 
 def _lead(external_id: str = "j-1") -> Order:
     return Order(
-        source="rss",
+        source="freelancer",
         external_id=external_id,
         title="Нужен Telegram бот на Python",
         url="https://example.com/j1",
@@ -356,7 +357,7 @@ def test_card_always_fits_telegram_limit() -> None:
     from bot.cards import TELEGRAM_LIMIT, render_card
 
     order = Order(
-        source="rss", external_id="1", title="Т" * 400,
+        source="freelancer", external_id="1", title="Т" * 400,
         url="https://example.com/" + "x" * 200, description="d",
         score=90, category="К" * 100, reason="П" * 600,
         technology="т" * 200, summary="с" * 500,
@@ -370,7 +371,7 @@ def test_card_always_fits_telegram_limit() -> None:
 def test_short_card_is_untouched() -> None:
     from bot.cards import render_card
 
-    order = Order(source="rss", external_id="1", title="Бот",
+    order = Order(source="freelancer", external_id="1", title="Бот",
                   url="https://example.com/1", description="d", score=90)
     card = render_card(order, "Готов взяться за проект.")
     assert "Готов взяться за проект." in card
@@ -399,7 +400,7 @@ def test_lead_list_fits_limit() -> None:
 
     rows = [
         _Row(
-            id=i, source="rss", external_id=str(i), title="З" * 400,
+            id=i, source="freelancer", external_id=str(i), title="З" * 400,
             url="https://example.com/" + "y" * 200, description="d",
             budget_raw="", budget_value=None, score=90, category="К" * 80,
             reason="", probability_of_sale=None, should_send=1,

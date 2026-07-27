@@ -25,7 +25,7 @@ async def db(tmp_path):
 
 def _order(external_id: str = "1", **kwargs) -> Order:
     base = dict(
-        source="rss",
+        source="freelancer",
         external_id=external_id,
         title="Telegram бот",
         url="https://example.com",
@@ -39,9 +39,14 @@ def _order(external_id: str = "1", **kwargs) -> Order:
 
 
 async def test_unknown_user_gets_defaults(db) -> None:
+    from core.sources import default_enabled_ids
+
     settings = await db.get_user_settings(USER)
-    assert settings == UserSettings()
     assert settings.onboarded is False
+    assert settings.categories == ()
+    assert settings.keywords == ()
+    # Источники приходят из реестра: включено то, что default_enabled.
+    assert settings.sources == default_enabled_ids()
 
 
 async def test_settings_roundtrip(db) -> None:
@@ -53,7 +58,12 @@ async def test_settings_roundtrip(db) -> None:
         onboarded=True,
     )
     await db.save_user_settings(USER, settings)
-    assert await db.get_user_settings(USER) == settings
+    stored = await db.get_user_settings(USER)
+    # Источники живут в отдельной таблице, поэтому сравниваем остальное.
+    assert stored.categories == settings.categories
+    assert stored.keywords == settings.keywords
+    assert stored.min_budget == settings.min_budget
+    assert stored.onboarded is True
 
 
 async def test_settings_are_per_user(db) -> None:
@@ -75,7 +85,6 @@ async def test_empty_lists_roundtrip_as_empty(db) -> None:
     """Пустой список не должен превратиться в ('',) — иначе фильтр сломается."""
     await db.save_user_settings(USER, UserSettings(onboarded=True))
     settings = await db.get_user_settings(USER)
-    assert settings.sources == ()
     assert settings.categories == ()
     assert settings.keywords == ()
 

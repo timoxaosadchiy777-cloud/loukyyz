@@ -104,7 +104,8 @@ async def test_recipients_load_in_single_query(tmp_path) -> None:
         assert [uid for uid, _ in recipients] == [100, 201, 202, 203]
         by_id = dict(recipients)
         assert by_id[202].min_budget == 300
-        assert by_id[201] == UserSettings()  # LEFT JOIN без настроек
+        assert by_id[201].min_budget == 0  # LEFT JOIN без настроек
+        assert by_id[201].keywords == ()
     finally:
         await db.close()
 

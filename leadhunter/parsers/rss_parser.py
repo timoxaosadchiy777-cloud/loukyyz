@@ -24,7 +24,11 @@ import feedparser
 from bot.alerts import Alerter
 from config import Settings
 from core.models import Order
+from core.sources import ALL_SOURCES
 from parsers.base import BaseParser
+
+# Источник по умолчанию для любого нераспознанного фида.
+RSS_SOURCE = "weworkremotely"
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +74,7 @@ class RssParser(BaseParser):
             for url in feeds:
                 try:
                     emitted = await self._poll_feed(url)
-                    log.info("RSS %s: новых лидов в очередь — %s", _host(url), emitted)
+                    log.info("SOURCE %s: найдено %s новых", _source_from_url(url).upper(), emitted)
                 except Exception as exc:
                     log.exception("RSS: ошибка обработки фида %s", url)
                     await self.alert(
@@ -152,12 +156,18 @@ def _extract_budget(text: str) -> tuple[str, int | None]:
 
 
 def _source_from_url(url: str) -> str:
+    """Сопоставляет фид с источником из реестра.
+
+    Раньше возвращались id «rss», «upwork», «fiverr», которых в реестре нет:
+    такие лиды не проходили ни один пользовательский фильтр и молча пропадали.
+    Всё, что не опознано, считаем weworkremotely — это и есть RSS-источник.
+    """
     host = (urlparse(url).hostname or "").lower()
-    if "upwork" in host:
-        return "upwork"
-    if "fiverr" in host:
-        return "fiverr"
-    return "rss"
+    for source in ALL_SOURCES:
+        # weworkremotely → «weworkremotely», совпадёт с хостом напрямую.
+        if source.replace("_", "") in host.replace("-", "").replace(".", ""):
+            return source
+    return RSS_SOURCE
 
 
 def _host(url: str) -> str:

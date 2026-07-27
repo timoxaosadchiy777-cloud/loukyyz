@@ -21,7 +21,7 @@ async def db(tmp_path):
 
 def _scored_order() -> Order:
     return Order(
-        source="rss",
+        source="freelancer",
         external_id="ext-1",
         title="Нужен Telegram бот",
         url="https://example.com/1",
@@ -62,7 +62,7 @@ async def test_duplicate_ignored(db) -> None:
     second = await db.save_order(_scored_order())
     assert first is not None
     assert second is None  # UNIQUE(source, external_id) → OR IGNORE
-    assert await db.is_duplicate("rss", "ext-1") is True
+    assert await db.is_duplicate("freelancer", "ext-1") is True
 
 
 async def test_set_crm_status(db) -> None:
@@ -73,7 +73,7 @@ async def test_set_crm_status(db) -> None:
 
 
 async def test_unknown_score_persists_as_null(db) -> None:
-    order = Order(source="rss", external_id="x", title="t", url="u", description="d")
+    order = Order(source="freelancer", external_id="x", title="t", url="u", description="d")
     order_id = await db.save_order(order, response="", status="new")
     row = await db.get_order(order_id)
     assert row["score"] is None
@@ -105,7 +105,7 @@ async def test_migration_adds_columns_to_legacy_db(tmp_path) -> None:
         )
         await conn.execute(
             "INSERT INTO orders (source, external_id, title, url, description, status, created_at)"
-            " VALUES ('rss','old','t','u','d','new','2020-01-01T00:00:00+00:00')"
+            " VALUES ('freelancer','old','t','u','d','new','2020-01-01T00:00:00+00:00')"
         )
         await conn.commit()
 

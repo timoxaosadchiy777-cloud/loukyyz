@@ -10,7 +10,7 @@ from core.user_settings import UserSettings
 
 def _order(**kwargs) -> Order:
     base = dict(
-        source="rss",
+        source="freelancer",
         external_id="1",
         title="Нужен Telegram бот на Python",
         url="https://example.com",
@@ -24,7 +24,10 @@ def _order(**kwargs) -> Order:
 
 
 def test_all_sources_are_only_available_ones() -> None:
-    assert ALL_SOURCES == ("upwork", "fiverr", "rss", "kwork", "kwork_com")
+    """Upwork и Fiverr в реестре есть, но парсить у них нечего."""
+    assert "upwork" not in ALL_SOURCES
+    assert "fiverr" not in ALL_SOURCES
+    assert {"kwork", "kwork_com", "freelancer", "peopleperhour", "guru"} <= set(ALL_SOURCES)
 
 
 def test_kwork_is_available_now() -> None:
@@ -66,7 +69,7 @@ def test_source_ids_are_unique() -> None:
 def test_default_settings_match_everything() -> None:
     settings = UserSettings()
     assert settings.matches(_order()) is True
-    assert settings.matches(_order(source="upwork", budget_value=1)) is True
+    assert settings.matches(_order(source="freelancer", budget_value=1)) is True
 
 
 def test_new_user_is_not_onboarded() -> None:
@@ -78,15 +81,15 @@ def test_new_user_is_not_onboarded() -> None:
 
 def test_toggle_source_starts_from_all() -> None:
     """Первое выключение трактуется как «все, кроме этой»."""
-    settings = UserSettings().toggled_source("rss")
-    assert settings.sources == ("upwork", "fiverr", "kwork", "kwork_com")
-    assert settings.source_enabled("rss") is False
-    assert settings.source_enabled("upwork") is True
+    settings = UserSettings().toggled_source("kwork")
+    assert "kwork" not in settings.sources
+    assert settings.source_enabled("kwork") is False
+    assert settings.source_enabled("freelancer") is True
 
 
 def test_toggle_source_back_on() -> None:
-    settings = UserSettings(sources=("upwork",)).toggled_source("rss")
-    assert settings.sources == ("upwork", "rss")  # порядок из реестра
+    settings = UserSettings(sources=("kwork",)).toggled_source("guru")
+    assert settings.sources == ("kwork", "guru")  # порядок из реестра
 
 
 def test_toggle_unavailable_source_is_ignored() -> None:
@@ -95,8 +98,8 @@ def test_toggle_unavailable_source_is_ignored() -> None:
 
 
 def test_order_from_disabled_source_filtered_out() -> None:
-    settings = UserSettings(sources=("upwork",))
-    assert settings.matches(_order(source="rss")) is False
+    settings = UserSettings(sources=("kwork",))
+    assert settings.matches(_order(source="freelancer")) is False
 
 
 # --- Бюджет ---------------------------------------------------------------

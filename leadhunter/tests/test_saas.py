@@ -237,7 +237,7 @@ async def test_menu_shows_personal_stats(msg, bot_db, access, rec, fsm) -> None:
 
     await bot_db.save_user_settings(USER, UserSettings(onboarded=True))
     order_id = await bot_db.save_order(
-        Order(source="rss", external_id="1", title="t", url="u", description="d")
+        Order(source="freelancer", external_id="1", title="t", url="u", description="d")
     )
     await bot_db.mark_delivered(USER, order_id, "черновик")
     await bot_db.save_lead(USER, order_id)

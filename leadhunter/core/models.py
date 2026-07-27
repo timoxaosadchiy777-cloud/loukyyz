@@ -11,6 +11,18 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_dt(raw: str) -> datetime | None:
+    """Читает ISO-дату из БД; мусор и пустая строка дают None."""
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    # Наивную дату считаем UTC: сравнивать её с aware-датой иначе нельзя.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _column(row: Mapping, name: str) -> str:
     """Значение колонки, устойчивое к строкам без неё (старая БД, узкий SELECT)."""
     try:
@@ -87,6 +99,10 @@ class Order:
     budget_value: int | None = None
     budget_currency: str = "USD"
     created_at: datetime = field(default_factory=_utcnow)
+    # Когда заказ опубликован НА БИРЖЕ (не когда мы его нашли). None = биржа
+    # не сообщила дату. Нужен для отсечки старых лидов: откликаться на заказ
+    # недельной давности бессмысленно, там уже сотня откликов.
+    published_at: datetime | None = None
     # --- AI Lead Scoring ---
     score: int | None = None
     category: str = ""
@@ -129,5 +145,6 @@ class Order:
             should_send=None if should_send is None else bool(should_send),
             technology=_column(row, "technology"),
             summary=_column(row, "summary"),
+            published_at=_parse_dt(_column(row, "published_at")),
             crm_status=row["crm_status"] or CrmStatus.NEW,
         )
