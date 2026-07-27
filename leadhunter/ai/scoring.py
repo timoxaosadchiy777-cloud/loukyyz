@@ -55,10 +55,15 @@ _SCORING_INSTRUCTIONS = """\
 {
   "score": <целое 0..100 — насколько заказ подходит исполнителю>,
   "category": "<короткая категория, напр. 'Telegram Bot', 'Парсинг', 'Дизайн'>",
+  "technology": "<стек через запятую, напр. 'python, aiogram, postgresql'; '' если не ясно>",
+  "summary": "<1 предложение: суть заказа своими словами, по-русски>",
   "reason": "<1-2 предложения: почему такая оценка, по-русски>",
   "probability_of_sale": <целое 0..100 — вероятность довести заказ до сделки>,
   "should_send": <true|false — стоит ли показывать заказ исполнителю>
 }
+
+Поля category, technology и summary — объективное описание САМОГО заказа, без
+привязки к профилю: по ним система подбирает заказ разным исполнителям.
 
 Как выставлять score (ориентиры калибровки):
 - «Нужен Telegram бот» → ~95
@@ -83,12 +88,18 @@ false — если это явно не его профиль. Порог по �
 class LeadScore:
     """Результат скоринга заказа.
 
+    Категория, технология и краткое описание — объективные признаки самого
+    заказа: они не зависят от исполнителя, поэтому считаются ОДИН раз на лид и
+    переиспользуются при подборе получателей (см. :mod:`core.fanout`).
+
     Attributes:
         score: Оценка соответствия 0..100, либо ``None`` — если ИИ недоступен.
         category: Категория заказа по мнению модели.
         reason: Короткое обоснование оценки.
         probability_of_sale: Вероятность довести заказ до сделки, 0..100 (или None).
         should_send: Рекомендация модели показывать ли заказ, либо ``None``.
+        technology: Стек заказа через запятую (или пустая строка).
+        summary: Суть заказа одним предложением (или пустая строка).
     """
 
     score: int | None
@@ -96,6 +107,8 @@ class LeadScore:
     reason: str
     probability_of_sale: int | None
     should_send: bool | None
+    technology: str = ""
+    summary: str = ""
 
     @property
     def available(self) -> bool:
@@ -200,6 +213,8 @@ def _parse_score(text: str) -> LeadScore | None:
         reason=reason,
         probability_of_sale=probability,
         should_send=should_send,
+        technology=str(data.get("technology") or "").strip()[:120],
+        summary=str(data.get("summary") or "").strip()[:300],
     )
 
 

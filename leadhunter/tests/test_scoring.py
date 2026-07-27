@@ -123,3 +123,38 @@ def test_leadscore_unknown_helper() -> None:
     assert score.available is False
     assert score.score is None
     assert score.should_send is None
+
+
+# --- Общий анализ лида (LeadHunter 3.0) ---
+
+def test_parse_extracts_technology_and_summary() -> None:
+    """Признаки заказа считаются один раз и переиспользуются для всех юзеров."""
+    parsed = _parse_score(
+        '{"score": 88, "category": "Telegram Bot", "reason": "по профилю",'
+        ' "probability_of_sale": 70, "should_send": true,'
+        ' "technology": "python, aiogram", "summary": "Бот приёма заявок"}'
+    )
+    assert parsed.technology == "python, aiogram"
+    assert parsed.summary == "Бот приёма заявок"
+
+
+def test_missing_technology_and_summary_default_to_empty() -> None:
+    """Старый формат ответа модели не должен ронять разбор."""
+    parsed = _parse_score('{"score": 70, "category": "Парсинг", "should_send": true}')
+    assert parsed.technology == ""
+    assert parsed.summary == ""
+
+
+def test_unknown_score_has_empty_analysis() -> None:
+    unknown = LeadScore.unknown()
+    assert unknown.technology == ""
+    assert unknown.summary == ""
+
+
+def test_long_analysis_fields_are_truncated() -> None:
+    parsed = _parse_score(
+        '{"score": 50, "category": "c", "should_send": true,'
+        f' "technology": "{"x" * 500}", "summary": "{"y" * 900}"}}'
+    )
+    assert len(parsed.technology) == 120
+    assert len(parsed.summary) == 300

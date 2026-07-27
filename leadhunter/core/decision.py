@@ -17,6 +17,8 @@ def apply_score(order: Order, lead_score: LeadScore) -> None:
     order.reason = lead_score.reason
     order.probability_of_sale = lead_score.probability_of_sale
     order.should_send = lead_score.should_send
+    order.technology = lead_score.technology
+    order.summary = lead_score.summary
 
 
 def decide(lead_score: LeadScore, *, min_score: int) -> bool | None:

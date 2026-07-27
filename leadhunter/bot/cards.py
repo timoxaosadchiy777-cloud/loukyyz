@@ -16,6 +16,7 @@ _SOURCE_LABELS = {
     "upwork": "Upwork",
     "fiverr": "Fiverr",
     "rss": "RSS",
+    "kwork": "Kwork",
 }
 
 
@@ -47,6 +48,10 @@ def _score_block(order: Order) -> list[str]:
         f"{_score_emoji(order.score)} <b>AI Score:</b> {order.score}/100",
         f"🗂 Категория: {escape(order.category or '—')}",
     ]
+    if order.technology:
+        lines.append(f"🛠 Стек: {escape(order.technology)}")
+    if order.summary:
+        lines.append(f"📝 Суть: {escape(order.summary)}")
     if order.reason:
         lines.append(f"📊 Почему подходит: {escape(order.reason)}")
     if order.probability_of_sale is not None:

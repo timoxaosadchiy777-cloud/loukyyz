@@ -11,6 +11,29 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _column(row: Mapping, name: str) -> str:
+    """Значение колонки, устойчивое к строкам без неё (старая БД, узкий SELECT)."""
+    try:
+        return row[name] or ""
+    except (IndexError, KeyError):
+        return ""
+
+
+class LeadState:
+    """Личное состояние лида у конкретного пользователя (``lead_deliveries``).
+
+    Отличается от ``Order.status`` (состояние лида в пайплайне) и от
+    :class:`CrmStatus` (стадия сделки): здесь — что пользователь сделал с
+    карточкой.
+    """
+
+    SENT = "sent"
+    SAVED = "saved"
+    REJECTED = "rejected"
+
+    ALL = (SENT, SAVED, REJECTED)
+
+
 class CrmStatus:
     """Статусы воронки продаж (CRM). Хранятся в БД строкой."""
 
@@ -67,6 +90,10 @@ class Order:
     reason: str = ""
     probability_of_sale: int | None = None
     should_send: bool | None = None
+    # Признаки самого заказа (не зависят от исполнителя): считаются один раз и
+    # используются при подборе получателей — см. core/fanout.py.
+    technology: str = ""
+    summary: str = ""
     # --- CRM ---
     crm_status: str = CrmStatus.NEW
 
@@ -96,5 +123,7 @@ class Order:
             reason=row["reason"] or "",
             probability_of_sale=row["probability_of_sale"],
             should_send=None if should_send is None else bool(should_send),
+            technology=_column(row, "technology"),
+            summary=_column(row, "summary"),
             crm_status=row["crm_status"] or CrmStatus.NEW,
         )
