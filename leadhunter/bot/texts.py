@@ -137,3 +137,12 @@ def access_request(user_id: int, username: str) -> str:
     )
 
 SOURCE_SOON = "Эта биржа скоро появится — парсер ещё в работе."
+
+
+def regen_too_often(seconds: float) -> str:
+    """Перегенерация упёрлась в лимит — объясняем без упрёков."""
+    minutes = max(1, round(seconds / 60))
+    return (
+        "⏳ Слишком часто просишь новый вариант.\n"
+        f"Попробуй через {minutes} мин — или напиши свой текст сообщением."
+    )

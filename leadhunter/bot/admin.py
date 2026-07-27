@@ -168,18 +168,21 @@ async def _show_panel(query: CallbackQuery, db: Database) -> None:
 
 async def _show_users(query: CallbackQuery, db: Database, page: int) -> None:
     total, paid = await db.count_users()
-    rows = await db.list_users(limit=_USERS_LIMIT)
-    chunk = rows[page * ADMIN_PAGE_SIZE : (page + 1) * ADMIN_PAGE_SIZE]
-
-    if not rows:
+    if not total:
         await _edit(query, texts.ADMIN_NO_USERS, back_to_admin_keyboard())
         return
+
+    # Страницу берём из базы, а не режем выборку в Python: иначе всё, что не
+    # попало в первую сотню, становится недоступным для управления.
+    last_page = max(0, (total - 1) // ADMIN_PAGE_SIZE)
+    page = min(max(0, page), last_page)
+    rows = await db.list_users(limit=ADMIN_PAGE_SIZE, offset=page * ADMIN_PAGE_SIZE)
 
     text = (
         f"👥 <b>Пользователи</b> — всего {total}, с доступом {paid}\n\n"
         "Тап по строке переключает доступ."
     )
-    await _edit(query, text, admin_users_keyboard(chunk, page, len(rows)))
+    await _edit(query, text, admin_users_keyboard(rows, page, total))
 
 
 async def _show_requests(query: CallbackQuery, db: Database) -> None:

@@ -367,11 +367,19 @@ class Database:
         )
         return await cur.fetchone()
 
-    async def list_users(self, limit: int = 100) -> list[aiosqlite.Row]:
-        """Список пользователей: сначала с доступом, потом по дате регистрации."""
+    async def list_users(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[aiosqlite.Row]:
+        """Страница списка пользователей: сначала с доступом, потом по дате.
+
+        Постранично именно в SQL: раньше выбирались первые 50 и резались уже в
+        Python, поэтому при большем числе пользователей остальные просто
+        исчезали из админки — ими нельзя было управлять.
+        """
         cur = await self._connection.execute(
-            "SELECT * FROM users ORDER BY paid_status DESC, created_at ASC LIMIT ?",
-            (limit,),
+            "SELECT * FROM users ORDER BY paid_status DESC, created_at ASC"
+            " LIMIT ? OFFSET ?",
+            (limit, max(0, offset)),
         )
         return list(await cur.fetchall())
 

@@ -26,7 +26,7 @@ from bot import texts
 from bot.access import AccessControl
 from bot.admin import admin_router, announce_request
 from bot.callbacks import AccessAction, CrmAction, HelpAction, OrderAction
-from bot.cards import render_card
+from bot.cards import render_card, split_plain
 from bot.keyboards import (
     help_keyboard,
     order_keyboard,
@@ -38,6 +38,7 @@ from bot.screens import render_menu
 from bot.wizard import start_wizard, wizard_router
 from config import Settings
 from core.models import CRM_LABELS, CrmStatus, LeadState, Order
+from core.ratelimit import RateLimiter
 from database.db import Database
 
 log = logging.getLogger(__name__)
@@ -45,6 +46,11 @@ log = logging.getLogger(__name__)
 router = Router(name="leadhunter")
 
 _NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+
+# Перегенерация отклика — это запрос к модели, то есть деньги (или занятая
+# очередь локального Ollama). Без ограничения один пользователь, кликающий
+# «Сгенерировать заново», выжигает квоту провайдера на всех остальных.
+_regen_limiter = RateLimiter(limit=5, window=300)
 
 
 @router.message(CommandStart())
@@ -213,9 +219,10 @@ async def on_order_action(
         response = (delivery["response"] if delivery else "") or row["response"]
         if isinstance(query.message, Message):
             # Чистый текст отдельным сообщением — удобно копировать/пересылать.
-            await query.message.answer(
-                response or "(отклик отсутствует)", parse_mode=None
-            )
+            # Длинный отклик режем на части: обрезать его нельзя, пользователю
+            # нужен весь текст, а Telegram не примет больше 4096 символов.
+            for part in split_plain(response) or ["(отклик отсутствует)"]:
+                await query.message.answer(part, parse_mode=None)
         await query.answer("Отклик готов — копируй и отправляй 🚀")
         return
 
@@ -255,6 +262,10 @@ async def on_order_action(
         return
 
     if action == "regen":
+        wait = _regen_limiter.check(user_id)
+        if wait > 0:
+            await query.answer(texts.regen_too_often(wait), show_alert=True)
+            return
         await _regenerate(query, db, row, responder)
         return
 

@@ -21,11 +21,15 @@ from bot.keyboards import (
     settings_keyboard,
     sources_keyboard,
 )
+from bot.cards import TELEGRAM_LIMIT
 from core.models import Order
 from core.user_settings import UserSettings
 
 # Сколько лидов показываем в списках («Проверить сейчас», «Сохранённые»).
 LEADS_LIMIT = 10
+
+# Запас под служебную разметку сообщения.
+_SAFETY = 200
 
 _STEP_TITLES: dict[str, str] = {
     "sources": "🌐 Биржи",
@@ -130,8 +134,21 @@ def _lead_line(row) -> str:
 def render_leads(rows, *, title: str, empty: str) -> str:
     if not rows:
         return f"<b>{title}</b>\n\n{empty}"
+
     lines = [f"<b>{title}</b>", ""]
-    lines += [_lead_line(row) for row in rows]
+    # Десять лидов с длинными заголовками способны перерасти лимит Telegram,
+    # и тогда сообщение не отправится вовсе. Добираем, пока влезает.
+    budget = TELEGRAM_LIMIT - _SAFETY - len(lines[0])
+    shown = 0
+    for row in rows:
+        line = _lead_line(row)
+        if budget - len(line) - 1 < 0:
+            break
+        lines.append(line)
+        budget -= len(line) + 1
+        shown += 1
+    if shown < len(rows):
+        lines.append(f"\n… и ещё {len(rows) - shown}")
     return "\n".join(lines)
 
 
