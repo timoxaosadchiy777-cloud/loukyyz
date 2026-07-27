@@ -82,8 +82,14 @@ def render_wizard_intro() -> str:
     )
 
 
-def render_menu(settings: UserSettings) -> tuple[str, InlineKeyboardMarkup]:
-    lines = ["🎯 <b>LeadHunter</b>", "", "<b>Твои фильтры:</b>"]
+def render_menu(
+    settings: UserSettings, stats: tuple[int, int] | None = None
+) -> tuple[str, InlineKeyboardMarkup]:
+    lines = ["🎯 <b>LeadHunter</b>"]
+    if stats is not None:
+        received, saved = stats
+        lines += ["", f"📊 Получено лидов: <b>{received}</b> · ❤️ Сохранено: <b>{saved}</b>"]
+    lines += ["", "<b>Твои фильтры</b>"]
     lines += [escape(line) for line in settings.summary_lines()]
     return "\n".join(lines), menu_keyboard()
 

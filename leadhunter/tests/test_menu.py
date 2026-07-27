@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bot import texts
 from bot.bot import on_order_action
 from bot.callbacks import EditAction, MenuAction, OrderAction
 from bot.menu import on_edit_field, on_menu_action, on_menu_command
@@ -9,7 +10,13 @@ from core.models import Order
 from core.user_settings import UserSettings
 from tests.helpers import STRANGER, USER, labels
 
-MENU_BUTTONS = ["⚙️ Настройки", "🔍 Проверить сейчас", "⭐ Сохранённые лиды", "🌐 Биржи"]
+MENU_BUTTONS = [
+    "⚙️ Настройки",
+    "🔍 Проверить сейчас",
+    "⭐ Сохранённые лиды",
+    "🌐 Биржи",
+    "❓ Справка",
+]
 
 
 def _order(external_id="1", **kwargs) -> Order:
@@ -29,7 +36,7 @@ def _order(external_id="1", **kwargs) -> Order:
 # --- Меню -----------------------------------------------------------------
 
 
-async def test_menu_command_shows_four_buttons(msg, bot_db, access, rec, fsm) -> None:
+async def test_menu_command_shows_all_buttons(msg, bot_db, access, rec, fsm) -> None:
     await on_menu_command(msg(), bot_db, access, fsm)
     assert labels(rec.last_markup) == MENU_BUTTONS
 
@@ -56,7 +63,7 @@ async def test_menu_action_returns_to_menu(cq, bot_db, access, rec) -> None:
 
 async def test_menu_denies_user_without_access(cq, bot_db, access, rec) -> None:
     await on_menu_action(cq(STRANGER), MenuAction(action="check"), bot_db, access)
-    assert rec.alerts == ["Нет доступа"]
+    assert rec.alerts == [texts.ERR_NO_ACCESS]
     assert rec.texts == []
 
 
@@ -98,7 +105,7 @@ async def test_edit_each_filter_opens_its_screen(cq, bot_db, access, rec) -> Non
 
 async def test_edit_denied_without_access(cq, bot_db, access, rec) -> None:
     await on_edit_field(cq(STRANGER), EditAction(field="budget"), bot_db, access)
-    assert rec.alerts == ["Нет доступа"]
+    assert rec.alerts == [texts.ERR_NO_ACCESS]
 
 
 # --- «Проверить сейчас» ---------------------------------------------------
@@ -213,5 +220,5 @@ async def test_save_denied_without_access(cq, bot_db, access, rec, fsm) -> None:
     await on_order_action(
         cq(STRANGER), OrderAction(action="save", order_id=order_id), bot_db, access, fsm
     )
-    assert rec.alerts == ["Нет доступа"]
+    assert rec.alerts == [texts.ERR_NO_ACCESS]
     assert await bot_db.is_lead_saved(STRANGER, order_id) is False

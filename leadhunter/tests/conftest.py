@@ -76,13 +76,41 @@ class Journal:
         return any(needle in text for text in self.texts)
 
 
-def _message(user_id: int, text: str = "") -> Message:
-    return _RecordingMessage(
-        message_id=1,
-        date=datetime.now(timezone.utc),
-        chat=Chat(id=user_id, type="private"),
-        from_user=User(id=user_id, is_bot=False, first_name="Тест"),
-        text=text,
+class RecordingBot:
+    """Подставной Bot: ловит исходящие сообщения (уведомления, заявки)."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[int, str, InlineKeyboardMarkup | None]] = []
+
+    async def send_message(self, chat_id: int, text: str, **kwargs):
+        self.sent.append((chat_id, text, kwargs.get("reply_markup")))
+
+    def to(self, chat_id: int) -> list[str]:
+        return [text for target, text, _ in self.sent if target == chat_id]
+
+    @property
+    def chats(self) -> list[int]:
+        return [target for target, _, _ in self.sent]
+
+    def markup_for(self, chat_id: int) -> InlineKeyboardMarkup | None:
+        for target, _, markup in reversed(self.sent):
+            if target == chat_id and markup is not None:
+                return markup
+        return None
+
+
+def _message(user_id: int, text: str = "", bot=None) -> Message:
+    # Объект бота у aiogram приходит из контекста валидации — только так его
+    # можно подставить, не поднимая настоящий Bot с токеном.
+    return _RecordingMessage.model_validate(
+        {
+            "message_id": 1,
+            "date": datetime.now(timezone.utc),
+            "chat": Chat(id=user_id, type="private"),
+            "from_user": User(id=user_id, is_bot=False, first_name="Тест"),
+            "text": text,
+        },
+        context={"bot": bot},
     )
 
 
@@ -93,22 +121,31 @@ def rec() -> Journal:
 
 
 @pytest.fixture
-def msg():
-    """Фабрика входящих сообщений: ``msg()`` / ``msg(STRANGER, text='...')``."""
-    return lambda user_id=USER, text="": _message(user_id, text)
+def tg_bot() -> RecordingBot:
+    """Подставной Bot, доступный хендлерам как ``message.bot`` / ``query.bot``."""
+    return RecordingBot()
 
 
 @pytest.fixture
-def cq():
+def msg(tg_bot):
+    """Фабрика входящих сообщений: ``msg()`` / ``msg(STRANGER, text='...')``."""
+    return lambda user_id=USER, text="": _message(user_id, text, tg_bot)
+
+
+@pytest.fixture
+def cq(tg_bot):
     """Фабрика нажатий на инлайн-кнопку."""
 
     def _make(user_id: int = USER, data: str = "") -> CallbackQuery:
-        return _RecordingQuery(
-            id="1",
-            from_user=User(id=user_id, is_bot=False, first_name="Тест"),
-            chat_instance="chat-instance",
-            message=_message(user_id),
-            data=data,
+        return _RecordingQuery.model_validate(
+            {
+                "id": "1",
+                "from_user": User(id=user_id, is_bot=False, first_name="Тест"),
+                "chat_instance": "chat-instance",
+                "message": _message(user_id, bot=tg_bot),
+                "data": data,
+            },
+            context={"bot": tg_bot},
         )
 
     return _make

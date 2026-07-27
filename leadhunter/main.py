@@ -24,7 +24,7 @@ from ai.llm import LLMRouter, create_llm
 from ai.responder import Responder
 from ai.scoring import ScoringService
 from bot.alerts import Alerter
-from bot.bot import create_bot, create_dispatcher, push_card
+from bot.bot import create_bot, create_dispatcher, push_card, setup_commands
 from config import Settings, get_settings
 from core.decision import apply_score, decide
 from core.fanout import Recipient, prefilter, select
@@ -293,6 +293,8 @@ async def main() -> None:
     bot = create_bot(settings)
     dp = create_dispatcher(db, settings, responder)
     alerter = Alerter(bot, settings.owner_id, settings.alert_cooldown)
+    # Подсказки команд в синей кнопке Telegram (владельцу — ещё и админские).
+    await setup_commands(bot, settings.owner_id)
 
     # Ленивый импорт: feedparser нужен только для реального запуска парсера,
     # поэтому держим его здесь — модуль main остаётся импортируемым без feedparser.

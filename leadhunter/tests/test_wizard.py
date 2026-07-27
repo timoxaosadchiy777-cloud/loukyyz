@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bot import texts
 from bot.bot import on_start
 from bot.callbacks import CTX_SETTINGS, CTX_WIZARD, BudgetAction, ToggleAction, WizardAction
 from bot.wizard import (
@@ -39,7 +40,7 @@ async def test_start_shows_menu_for_onboarded_user(msg, bot_db, access, rec, fsm
 async def test_start_without_access_shows_id_not_wizard(msg, bot_db, access, rec, fsm) -> None:
     await on_start(msg(STRANGER), bot_db, access, fsm)
 
-    assert rec.has("доступ по подписке")
+    assert rec.has("Доступ выдаёт администратор")
     assert rec.has(str(STRANGER))
     assert not rec.has("Шаг 1/4")
 
@@ -53,7 +54,7 @@ async def test_kwork_is_shown_but_not_selectable(cq, msg, bot_db, access, rec, f
     assert any("Kwork" in text and "скоро" in text for text in labels(rec.last_markup))
 
     await on_soon(cq(), ToggleAction(kind="soon", value="kwork", ctx=CTX_WIZARD))
-    assert "Эта биржа скоро появится" in rec.alerts
+    assert texts.SOURCE_SOON in rec.alerts
     assert (await bot_db.get_user_settings(USER)).sources == ()
 
 
@@ -231,7 +232,7 @@ async def test_wizard_denies_user_without_access(cq, bot_db, access, fsm, rec) -
         cq(STRANGER), BudgetAction(value=100, ctx=CTX_WIZARD), bot_db, access
     )
 
-    assert rec.alerts == ["Нет доступа"] * 3
+    assert rec.alerts == [texts.ERR_NO_ACCESS] * 3
     assert (await bot_db.get_user_settings(STRANGER)) == UserSettings()
 
 

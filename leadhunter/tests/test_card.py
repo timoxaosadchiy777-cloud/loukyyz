@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from bot.bot import CardStates, on_crm_action, on_order_action, on_rewrite_text
+from bot import texts
 from bot.callbacks import CrmAction, OrderAction
 from core.models import CrmStatus, LeadState, Order
 from tests.helpers import STRANGER, USER, labels
@@ -137,7 +138,7 @@ async def test_regenerate_without_responder_is_honest(bot_db, access, cq, rec, f
     await on_order_action(
         cq(), OrderAction(action="regen", order_id=order_id), bot_db, access, fsm, None
     )
-    assert "Генерация недоступна" in rec.alerts
+    assert texts.ERR_GENERATION_OFF in rec.alerts
 
 
 async def test_regenerate_survives_ai_failure(bot_db, access, cq, rec, fsm) -> None:
@@ -214,7 +215,7 @@ async def test_crm_rejects_unknown_status(bot_db, access, cq, rec) -> None:
     await on_crm_action(
         cq(), CrmAction(status="выдумка", order_id=order_id), bot_db, access
     )
-    assert "Неизвестный статус" in rec.alerts
+    assert texts.ERR_UNKNOWN_STATUS in rec.alerts
 
 
 async def test_card_shows_personal_crm_after_redraw(bot_db, access, cq, rec) -> None:
@@ -238,7 +239,7 @@ async def test_all_card_actions_require_access(bot_db, access, cq, rec, fsm) -> 
         cq(STRANGER), CrmAction(status=CrmStatus.WON, order_id=order_id), bot_db, access
     )
 
-    assert rec.alerts == ["Нет доступа"] * 6
+    assert rec.alerts == [texts.ERR_NO_ACCESS] * 6
     assert await bot_db.get_delivery(STRANGER, order_id) is None
 
 
@@ -246,4 +247,4 @@ async def test_missing_order_is_reported(bot_db, access, cq, rec, fsm) -> None:
     await on_order_action(
         cq(), OrderAction(action="save", order_id=9999), bot_db, access, fsm
     )
-    assert "Заказ не найден" in rec.alerts
+    assert texts.ERR_ORDER_GONE in rec.alerts

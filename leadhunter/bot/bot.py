@@ -5,20 +5,34 @@ from __future__ import annotations
 import logging
 from html import escape
 
-from aiogram import Bot, Dispatcher, Router
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    CallbackQuery,
+    ErrorEvent,
+    LinkPreviewOptions,
+    Message,
+)
 
 from ai.responder import Responder
+from bot import texts
 from bot.access import AccessControl
-from bot.admin import admin_router
-from bot.callbacks import CrmAction, OrderAction
+from bot.admin import admin_router, announce_request
+from bot.callbacks import AccessAction, CrmAction, HelpAction, OrderAction
 from bot.cards import render_card
-from bot.keyboards import order_keyboard, rewrite_keyboard
+from bot.keyboards import (
+    help_keyboard,
+    order_keyboard,
+    request_access_keyboard,
+    rewrite_keyboard,
+)
 from bot.menu import menu_router
 from bot.screens import render_menu
 from bot.wizard import start_wizard, wizard_router
@@ -49,10 +63,11 @@ async def on_start(
     await db.register_user(user.id, user.username or "")
 
     if not await access.has_access(user.id):
+        # Продающий экран + заявка в один тап: копировать ID и искать
+        # администратора вручную не нужно.
         await message.answer(
-            "🔒 <b>LeadHunter</b> — доступ по подписке.\n\n"
-            "Твой Telegram ID: <code>{user_id}</code>\n"
-            "Отправь его администратору, чтобы получить доступ.".format(user_id=user.id)
+            texts.welcome_locked(user.id),
+            reply_markup=request_access_keyboard(user.id),
         )
         return
 
@@ -62,8 +77,53 @@ async def on_start(
         await start_wizard(message, db, user.id)
         return
 
-    text, markup = render_menu(settings)
+    text, markup = render_menu(settings, await db.user_stats(user.id))
     await message.answer(text, reply_markup=markup)
+
+
+@router.message(Command("help"))
+async def on_help(message: Message, access: AccessControl) -> None:
+    user = message.from_user
+    if user is None:
+        return
+    if not await access.has_access(user.id):
+        await message.answer(texts.ERR_NO_ACCESS)
+        return
+    await message.answer(texts.HELP, reply_markup=help_keyboard())
+
+
+@router.callback_query(HelpAction.filter())
+async def on_help_button(query: CallbackQuery, access: AccessControl) -> None:
+    if not await access.has_access(query.from_user.id):
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
+        return
+    if isinstance(query.message, Message):
+        try:
+            await query.message.edit_text(texts.HELP, reply_markup=help_keyboard())
+        except Exception:
+            log.debug("Справка не изменилась")
+    await query.answer()
+
+
+@router.callback_query(AccessAction.filter(F.action == "request"))
+async def on_access_request(
+    query: CallbackQuery, callback_data: AccessAction, db: Database, owner_id: int
+) -> None:
+    """Пользователь нажал «Запросить доступ» на стартовом экране."""
+    user = query.from_user
+    is_new = await db.request_access(user.id, user.username or "")
+
+    if not is_new:
+        await query.answer(texts.REQUEST_ALREADY_SENT, show_alert=True)
+        return
+
+    await announce_request(query.bot, owner_id, user.id, user.username or "")
+    if isinstance(query.message, Message):
+        try:
+            await query.message.edit_text(texts.REQUEST_SENT)
+        except Exception:
+            log.debug("Экран заявки не изменился")
+    await query.answer("Заявка отправлена ✅")
 
 
 class CardStates(StatesGroup):
@@ -116,14 +176,14 @@ async def on_order_action(
     responder: Responder | None = None,
 ) -> None:
     if not await access.has_access(query.from_user.id):
-        await query.answer("Нет доступа", show_alert=True)
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
         return
 
     order_id = callback_data.order_id
     user_id = query.from_user.id
     row = await db.get_order(order_id)
     if row is None:
-        await query.answer("Заказ не найден", show_alert=True)
+        await query.answer(texts.ERR_ORDER_GONE, show_alert=True)
         return
 
     action = callback_data.action
@@ -191,7 +251,7 @@ async def _regenerate(
 ) -> None:
     """Просит ИИ написать новый вариант отклика лично для этого пользователя."""
     if responder is None:
-        await query.answer("Генерация недоступна", show_alert=True)
+        await query.answer(texts.ERR_GENERATION_OFF, show_alert=True)
         return
 
     await query.answer("Готовлю новый вариант…")
@@ -199,7 +259,7 @@ async def _regenerate(
     response = await responder.generate(order)
     if not response:
         if isinstance(query.message, Message):
-            await query.message.answer("⚠️ Не получилось — ИИ сейчас недоступен.")
+            await query.message.answer(texts.ERR_AI_DOWN)
         return
 
     await db.set_delivery_response(query.from_user.id, row["id"], response)
@@ -241,17 +301,17 @@ async def on_crm_action(
     access: AccessControl,
 ) -> None:
     if not await access.has_access(query.from_user.id):
-        await query.answer("Нет доступа", show_alert=True)
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
         return
 
     status = callback_data.status
     if status not in CrmStatus.ALL:
-        await query.answer("Неизвестный статус", show_alert=True)
+        await query.answer(texts.ERR_UNKNOWN_STATUS, show_alert=True)
         return
 
     row = await db.get_order(callback_data.order_id)
     if row is None:
-        await query.answer("Заказ не найден", show_alert=True)
+        await query.answer(texts.ERR_ORDER_GONE, show_alert=True)
         return
 
     # Статус воронки персональный: под fan-out один заказ ведут независимо
@@ -259,6 +319,51 @@ async def on_crm_action(
     await db.set_delivery_crm(query.from_user.id, callback_data.order_id, status)
     await _redraw_card(query, db, row)
     await query.answer(f"Статус: {CRM_LABELS.get(status, status)}")
+
+
+@router.errors()
+async def on_error(event: ErrorEvent) -> bool:
+    """Ловит всё, что упало в хендлере.
+
+    Пользователь получает человеческое сообщение вместо тишины (или, хуже,
+    вечных «часиков» на кнопке), а подробности уходят в лог.
+    """
+    log.exception("Необработанная ошибка: %s", event.exception)
+
+    update = event.update
+    try:
+        if update.callback_query is not None:
+            await update.callback_query.answer(texts.ERR_GENERIC, show_alert=True)
+        elif update.message is not None:
+            await update.message.answer(texts.ERR_GENERIC)
+    except Exception:
+        log.debug("Не удалось сообщить об ошибке пользователю")
+    return True
+
+
+# Меню команд в синей кнопке Telegram. Владелец видит ещё и админские.
+_USER_COMMANDS = [
+    BotCommand(command="menu", description="🎯 Панель управления"),
+    BotCommand(command="help", description="❓ Как это работает"),
+    BotCommand(command="start", description="🚀 Начать заново"),
+]
+
+_ADMIN_COMMANDS = _USER_COMMANDS + [
+    BotCommand(command="admin", description="🛠 Админ-панель"),
+    BotCommand(command="users", description="👥 Список пользователей"),
+]
+
+
+async def setup_commands(bot: Bot, owner_id: int) -> None:
+    """Регистрирует подсказки команд. Сбой не должен мешать запуску бота."""
+    try:
+        await bot.set_my_commands(_USER_COMMANDS, scope=BotCommandScopeDefault())
+        if owner_id:
+            await bot.set_my_commands(
+                _ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=owner_id)
+            )
+    except Exception as exc:  # noqa: BLE001 — косметика, не критично
+        log.warning("Не удалось задать меню команд: %s", exc)
 
 
 def create_bot(settings: Settings) -> Bot:
