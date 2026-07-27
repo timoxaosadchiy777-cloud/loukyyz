@@ -39,8 +39,10 @@ def _mark(selected: bool) -> str:
 def order_keyboard(
     order_id: int, crm_status: str = CrmStatus.NEW, saved: bool = False
 ) -> InlineKeyboardMarkup:
-    """Клавиатура под карточкой: отклик, избранное и воронка CRM.
+    """Клавиатура под карточкой: отклик, личные действия и воронка CRM.
 
+    Все действия персональные: сохранение, правка отклика и статус воронки
+    пишутся в доставку этого пользователя и других получателей не задевают.
     Текущий статус помечается точкой и не дублируется отдельной кнопкой.
     """
     builder = InlineKeyboardBuilder()
@@ -49,8 +51,16 @@ def order_keyboard(
         callback_data=OrderAction(action="copy", order_id=order_id),
     )
     builder.button(
-        text="⭐ В избранном" if saved else "☆ В избранное",
+        text="💔 Убрать из сохранённых" if saved else "❤️ Сохранить",
         callback_data=OrderAction(action="unsave" if saved else "save", order_id=order_id),
+    )
+    builder.button(
+        text="✍️ Изменить отклик",
+        callback_data=OrderAction(action="rewrite", order_id=order_id),
+    )
+    builder.button(
+        text="❌ Отклонить",
+        callback_data=OrderAction(action="reject", order_id=order_id),
     )
     for status in _CRM_FLOW:
         label = CRM_LABELS[status]
@@ -60,8 +70,23 @@ def order_keyboard(
             text=label,
             callback_data=CrmAction(status=status, order_id=order_id),
         )
-    # Отклик и избранное сверху, затем воронка по 2 в ряд.
-    builder.adjust(1, 1, 2, 2)
+    # Отклик и сохранение сверху, затем правка/отклонение, затем воронка.
+    builder.adjust(1, 1, 2, 2, 2)
+    return builder.as_markup()
+
+
+def rewrite_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    """Экран правки отклика: перегенерировать через ИИ или написать свой."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔄 Сгенерировать заново",
+        callback_data=OrderAction(action="regen", order_id=order_id),
+    )
+    builder.button(
+        text="◀️ Отмена",
+        callback_data=OrderAction(action="cancel_rewrite", order_id=order_id),
+    )
+    builder.adjust(1, 1)
     return builder.as_markup()
 
 

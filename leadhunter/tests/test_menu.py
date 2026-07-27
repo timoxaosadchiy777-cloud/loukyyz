@@ -158,25 +158,25 @@ async def test_saved_is_empty_by_default(cq, bot_db, access, rec) -> None:
     assert rec.has("Тут пусто")
 
 
-async def test_save_lead_from_card_then_see_it_in_menu(cq, bot_db, access, rec) -> None:
+async def test_save_lead_from_card_then_see_it_in_menu(cq, bot_db, access, rec, fsm) -> None:
     order_id = await bot_db.save_order(_order(), response="r", status="new")
 
     await on_order_action(
-        cq(), OrderAction(action="save", order_id=order_id), bot_db, access
+        cq(), OrderAction(action="save", order_id=order_id), bot_db, access, fsm
     )
-    assert "Сохранено ⭐" in rec.alerts
+    assert "Сохранено ❤️" in rec.alerts
     assert await bot_db.is_lead_saved(USER, order_id) is True
 
     await on_menu_action(cq(), MenuAction(action="saved"), bot_db, access)
     assert rec.has("Telegram бот на Python")
 
 
-async def test_unsave_lead_from_card(cq, bot_db, access, rec) -> None:
+async def test_unsave_lead_from_card(cq, bot_db, access, rec, fsm) -> None:
     order_id = await bot_db.save_order(_order(), response="r", status="new")
     await bot_db.save_lead(USER, order_id)
 
     await on_order_action(
-        cq(), OrderAction(action="unsave", order_id=order_id), bot_db, access
+        cq(), OrderAction(action="unsave", order_id=order_id), bot_db, access, fsm
     )
     assert await bot_db.is_lead_saved(USER, order_id) is False
 
@@ -193,25 +193,25 @@ async def test_saved_leads_are_not_shared_between_users(cq, bot_db, access, rec)
     assert rec.has("Тут пусто")
 
 
-async def test_card_save_button_reflects_state(cq, bot_db, access, rec) -> None:
+async def test_card_save_button_reflects_state(cq, bot_db, access, rec, fsm) -> None:
     order_id = await bot_db.save_order(_order(), response="r", status="new")
 
     await on_order_action(
-        cq(), OrderAction(action="save", order_id=order_id), bot_db, access
+        cq(), OrderAction(action="save", order_id=order_id), bot_db, access, fsm
     )
-    assert "⭐ В избранном" in labels(rec.last_markup)
+    assert "💔 Убрать из сохранённых" in labels(rec.last_markup)
 
     await on_order_action(
-        cq(), OrderAction(action="unsave", order_id=order_id), bot_db, access
+        cq(), OrderAction(action="unsave", order_id=order_id), bot_db, access, fsm
     )
-    assert "☆ В избранное" in labels(rec.last_markup)
+    assert "❤️ Сохранить" in labels(rec.last_markup)
 
 
-async def test_save_denied_without_access(cq, bot_db, access, rec) -> None:
+async def test_save_denied_without_access(cq, bot_db, access, rec, fsm) -> None:
     order_id = await bot_db.save_order(_order(), response="r", status="new")
 
     await on_order_action(
-        cq(STRANGER), OrderAction(action="save", order_id=order_id), bot_db, access
+        cq(STRANGER), OrderAction(action="save", order_id=order_id), bot_db, access, fsm
     )
     assert rec.alerts == ["Нет доступа"]
     assert await bot_db.is_lead_saved(STRANGER, order_id) is False
