@@ -410,3 +410,63 @@ def test_lead_list_fits_limit() -> None:
     text = render_leads(rows, title="🔍 Лиды", empty="пусто")
     assert len(text) <= TELEGRAM_LIMIT
     assert "и ещё" in text
+
+
+# --- Первый опыт покупателя ------------------------------------------------
+
+
+def test_empty_config_is_explained_not_crashed() -> None:
+    """Покупатель с пустым .env должен получить инструкцию, а не трейсбек."""
+    from main import check_configuration
+
+    class _Empty:
+        bot_token = ""
+        owner_id = 0
+        dev_mode = False
+
+    problems = check_configuration(_Empty())
+    assert any("BOT_TOKEN" in p and "@BotFather" in p for p in problems)
+    assert any("OWNER_ID" in p and "@userinfobot" in p for p in problems)
+
+
+def test_malformed_token_is_caught_before_start() -> None:
+    from main import check_configuration
+
+    class _Bad:
+        bot_token = "просто-строка"
+        owner_id = 100
+        dev_mode = False
+
+    assert any("не похож на токен" in p for p in check_configuration(_Bad()))
+
+
+def test_valid_config_passes() -> None:
+    from main import check_configuration
+
+    class _Ok:
+        bot_token = "123456:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+        owner_id = 100
+        dev_mode = False
+
+    assert check_configuration(_Ok()) == []
+
+
+async def test_repeat_requests_do_not_flood_admin(
+    journey_db, cq, rec, tg_bot
+) -> None:
+    """После отказа заявку можно подать снова, но не бесконечно."""
+    from bot.bot import _request_limiter, on_access_request
+    from bot.callbacks import AccessAction
+
+    db = journey_db
+    _request_limiter.reset(CLIENT)
+    action = AccessAction(action="request", user_id=CLIENT)
+
+    for _ in range(6):
+        await on_access_request(cq(CLIENT), action, db, OWNER)
+        # Администратор отклонил — заявка снята, можно подать заново.
+        await db.clear_access_request(CLIENT)
+
+    # Уведомлений ушло не больше лимита, а не по одному на каждое нажатие.
+    assert len(tg_bot.chats) <= _request_limiter.limit
+    _request_limiter.reset(CLIENT)

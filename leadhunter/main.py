@@ -291,6 +291,15 @@ async def main() -> None:
     )
     log.info("Запуск LeadHunter…")
 
+    problems = check_configuration(settings)
+    if problems:
+        # Падать трейсбеком на пустом BOT_TOKEN — плохой первый опыт покупателя.
+        # Говорим человеческим языком, что именно поправить в .env.
+        log.error("Бот не может стартовать:")
+        for problem in problems:
+            log.error("  • %s", problem)
+        return
+
     # Пути резолвим от каталога проекта — работает из любого рабочего каталога.
     profile_file = settings.profile_file
     runtime_file = settings.runtime_config_file
@@ -387,6 +396,30 @@ async def main() -> None:
         await _quiet(responder.aclose())
         await _quiet(db.close())
         await _quiet(bot.session.close())
+
+
+def check_configuration(settings: Settings) -> list[str]:
+    """Проверяет минимально необходимые настройки перед запуском."""
+    problems: list[str] = []
+
+    token = settings.bot_token.strip()
+    if not token:
+        problems.append(
+            "BOT_TOKEN пуст. Получите токен у @BotFather и впишите его в .env"
+        )
+    elif ":" not in token or not token.split(":", 1)[0].isdigit():
+        problems.append(
+            "BOT_TOKEN не похож на токен Telegram (ожидается вид 123456:AA...). "
+            "Проверьте, что скопирован он целиком"
+        )
+
+    if not settings.owner_id and not settings.dev_mode:
+        problems.append(
+            "OWNER_ID не задан — бот никого не пустит и админ-панель будет "
+            "недоступна. Узнать свой ID: @userinfobot"
+        )
+
+    return problems
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:

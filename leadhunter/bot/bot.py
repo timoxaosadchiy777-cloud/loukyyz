@@ -52,6 +52,10 @@ _NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 # «Сгенерировать заново», выжигает квоту провайдера на всех остальных.
 _regen_limiter = RateLimiter(limit=5, window=300)
 
+# Заявки на доступ. После отказа админа заявка снимается, и без ограничения
+# пользователь мог слать её заново хоть каждую секунду, заваливая владельца.
+_request_limiter = RateLimiter(limit=2, window=3600)
+
 
 @router.message(CommandStart())
 async def on_start(
@@ -121,6 +125,11 @@ async def on_access_request(
 
     if not is_new:
         await query.answer(texts.REQUEST_ALREADY_SENT, show_alert=True)
+        return
+
+    if _request_limiter.check(user.id) > 0:
+        # Заявка сохранена, но администратора больше не дёргаем.
+        await query.answer(texts.REQUEST_SENT, show_alert=True)
         return
 
     await announce_request(query.bot, owner_id, user.id, user.username or "")
