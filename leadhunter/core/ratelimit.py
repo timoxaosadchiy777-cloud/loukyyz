@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import OrderedDict, deque
 
@@ -65,3 +66,33 @@ class RateLimiter:
 
     def reset(self, user_id: int) -> None:
         self._hits.pop(user_id, None)
+
+
+class AsyncThrottle:
+    """Глобальный ограничитель темпа исходящих сообщений.
+
+    Telegram считает лимит на бота целиком, а не на рассылку одного лида.
+    Ограничение «пауза каждые N сообщений внутри рассылки» этого не ловит:
+    при десятке получателей на лид счётчик просто не успевает дорасти, а
+    подряд идущие лиды складываются в общий поток и пробивают потолок.
+
+    Интервал выдерживается между вызовами процесса в целом, поэтому работает
+    и при нескольких параллельных обработчиках очереди.
+    """
+
+    def __init__(self, rate_per_second: float) -> None:
+        self._interval = 1.0 / max(0.1, rate_per_second)
+        self._next_slot = 0.0
+        self._lock = asyncio.Lock()
+
+    async def wait(self) -> None:
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            delay = self._next_slot - now
+            if delay > 0:
+                await asyncio.sleep(delay)
+                now = loop.time()
+            # Слот следующего сообщения считаем от текущего момента: после
+            # простоя не копим «долг» и не выстреливаем пачкой.
+            self._next_slot = max(now, self._next_slot) + self._interval

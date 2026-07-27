@@ -34,6 +34,7 @@ from core.health import Heartbeat
 from core.logging import setup_logging
 from core.models import CrmStatus, Order
 from core.profile import ProfileLoader
+from core.ratelimit import AsyncThrottle
 from core.runtime_config import RuntimeConfig, RuntimeConfigStore
 from database.db import Database
 
@@ -46,11 +47,11 @@ _MANUAL_FALLBACK = (
     "(Не удалось сгенерировать отклик автоматически — сформулируй вручную по ТЗ.)"
 )
 
-# Ограничение рассылки: Telegram допускает ~30 сообщений в секунду на бота.
-# Держимся заметно ниже потолка — лиды не настолько срочные, чтобы рисковать
-# временным баном на отправку.
-_BURST_SIZE = 20
-_BURST_PAUSE = 1.0
+# Ограничение рассылки: Telegram допускает ~30 сообщений в секунду на бота и
+# за превышение временно банит отправку. Лимит общий на процесс, поэтому и
+# ограничитель общий: паузы внутри одной рассылки недостаточно — при десятке
+# получателей на лид она не срабатывает, а подряд идущие лиды складываются.
+_send_throttle = AsyncThrottle(rate_per_second=20)
 
 
 async def handle_order(
@@ -231,6 +232,7 @@ async def deliver(
                 recipient.telegram_id,
             )
             continue
+        await _send_throttle.wait()
         try:
             await push_card(bot, recipient.telegram_id, order, response, order_id)
             delivered += 1
@@ -240,11 +242,6 @@ async def deliver(
                 order.dedup_key,
                 recipient.telegram_id,
             )
-        # Telegram режет отправку примерно на 30 сообщениях в секунду и за
-        # превышение временно банит бота. Рассылка на десятки получателей без
-        # паузы упирается в этот лимит, поэтому раздвигаем её во времени.
-        if delivered and delivered % _BURST_SIZE == 0:
-            await asyncio.sleep(_BURST_PAUSE)
     return delivered
 
 

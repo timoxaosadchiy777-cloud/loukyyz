@@ -470,3 +470,19 @@ async def test_repeat_requests_do_not_flood_admin(
     # Уведомлений ушло не больше лимита, а не по одному на каждое нажатие.
     assert len(tg_bot.chats) <= _request_limiter.limit
     _request_limiter.reset(CLIENT)
+
+
+async def test_send_rate_stays_under_telegram_limit() -> None:
+    """Пауза «каждые N внутри рассылки» не работала: при десятке получателей
+    на лид счётчик не успевал дорасти, а лиды складывались в общий поток."""
+    import time
+
+    from core.ratelimit import AsyncThrottle
+
+    throttle = AsyncThrottle(rate_per_second=20)
+    start = time.perf_counter()
+    for _ in range(30):
+        await throttle.wait()
+    elapsed = time.perf_counter() - start
+
+    assert 30 / elapsed < 30  # ниже потолка Telegram
