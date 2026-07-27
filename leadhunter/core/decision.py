@@ -21,17 +21,30 @@ def apply_score(order: Order, lead_score: LeadScore) -> None:
     order.summary = lead_score.summary
 
 
+# Выше этой оценки веток модели считается противоречием и не применяется.
+#
+# should_send задуман как предохранитель от очевидного мусора, но модели
+# охотно ставят false «на всякий случай» — и тогда веток превращался в
+# невидимый второй фильтр: при min_score=0 заказ с приличной оценкой всё равно
+# отклонялся, и владелец не понимал, почему настройка не работает.
+# Если модель сама оценила заказ достаточно высоко, доверяем числу, а не флагу.
+VETO_SCORE_CEILING = 50
+
+
 def decide(lead_score: LeadScore, *, min_score: int) -> bool | None:
     """Решение о доставке заказа.
 
     Returns:
-        ``True``  — заказ проходит (ИИ рекомендует и score ≥ порога);
-        ``False`` — заказ отклонён ИИ (низкий score или явный веток should_send);
+        ``True``  — заказ проходит (score ≥ порога и нет осмысленного ветка);
+        ``False`` — заказ отклонён (низкий score либо веток на низкой оценке);
         ``None``  — ИИ недоступен, решение принять нельзя (fail-open с пометкой).
     """
     if not lead_score.available:
         return None
-    # Явный веток от ИИ (should_send=false) отклоняет заказ независимо от score.
-    if lead_score.should_send is False:
+
+    score = lead_score.score or 0
+    # Веток уважаем только там, где он согласуется с оценкой: «не показывать»
+    # при score=70 — это противоречие в ответе модели, а не решение.
+    if lead_score.should_send is False and score < VETO_SCORE_CEILING:
         return False
-    return (lead_score.score or 0) >= min_score
+    return score >= min_score

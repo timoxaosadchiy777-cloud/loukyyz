@@ -25,9 +25,27 @@ def test_decide_rejects_below_threshold() -> None:
     assert decide(_score(40, True), min_score=60) is False
 
 
-def test_decide_veto_overrides_high_score() -> None:
-    # should_send=false отклоняет заказ даже при высоком score.
-    assert decide(_score(95, False), min_score=60) is False
+def test_veto_applies_only_to_low_scores() -> None:
+    """Веток — предохранитель от мусора, а не второй фильтр качества."""
+    assert decide(_score(20, False), min_score=0) is False
+
+
+def test_high_score_beats_contradictory_veto() -> None:
+    """«Не показывать» при score=95 — противоречие в ответе модели.
+
+    Модели охотно ставят should_send=false «на всякий случай». Раньше такой
+    флаг отклонял заказ даже при min_score=0, и владелец не понимал, почему
+    настройка порога не работает.
+    """
+    assert decide(_score(95, False), min_score=60) is True
+    assert decide(_score(55, False), min_score=0) is True
+
+
+def test_veto_boundary() -> None:
+    from core.decision import VETO_SCORE_CEILING
+
+    assert decide(_score(VETO_SCORE_CEILING - 1, False), min_score=0) is False
+    assert decide(_score(VETO_SCORE_CEILING, False), min_score=0) is True
 
 
 def test_decide_none_when_unavailable() -> None:

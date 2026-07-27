@@ -158,3 +158,48 @@ def test_long_analysis_fields_are_truncated() -> None:
     )
     assert len(parsed.technology) == 120
     assert len(parsed.summary) == 300
+
+
+# --- Промпт: предпринимательская рамка вместо совпадения навыков ---
+
+def test_prompt_asks_about_earning_not_matching() -> None:
+    """Раньше модель отвечала на вопрос «идеально ли совпадает», и резала всё."""
+    from ai.scoring import _SCORING_INSTRUCTIONS as prompt
+
+    assert "заработать на ней" in prompt
+    assert "не как рекрутер" in prompt
+
+
+def test_prompt_has_middle_of_the_scale() -> None:
+    """Без ориентиров 30..80 модель скатывалась к краям и ставила 2-10."""
+    from ai.scoring import _SCORING_INSTRUCTIONS as prompt
+
+    for band in ("90-100", "70-89", "50-69", "30-49", "10-29", "0-9"):
+        assert band in prompt
+    assert "ЧАЩЕ краёв" in prompt
+
+
+def test_prompt_warns_against_judging_by_job_title() -> None:
+    """Именно на названиях должностей ломались реальные лиды."""
+    from ai.scoring import _SCORING_INSTRUCTIONS as prompt
+
+    assert "Product Manager" in prompt
+    assert "Research Engineer" in prompt
+
+
+def test_prompt_restricts_veto_to_obvious_junk() -> None:
+    from ai.scoring import _SCORING_INSTRUCTIONS as prompt
+
+    assert "ТОЛЬКО когда заказ очевидно нерелевантен" in prompt
+    assert "Сомневаешься — ставь true" in prompt
+
+
+def test_profile_lists_adjacent_areas() -> None:
+    """Смежные области живут в профиле — он и есть пользовательская настройка."""
+    from pathlib import Path
+
+    profile = Path(__file__).resolve().parent.parent / "profile.md"
+    text = profile.read_text(encoding="utf-8")
+    assert "Смежные области" in text
+    for area in ("AI/LLM", "SaaS", "MVP", "Внутренние инструменты", "API-интеграции"):
+        assert area in text
