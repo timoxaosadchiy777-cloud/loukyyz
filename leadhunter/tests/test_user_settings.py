@@ -24,10 +24,11 @@ def _order(**kwargs) -> Order:
 
 
 def test_all_sources_are_only_available_ones() -> None:
-    """Upwork и Fiverr в реестре есть, но парсить у них нечего."""
-    assert "upwork" not in ALL_SOURCES
+    """Fiverr в реестре есть, но парсить у него нечего — выбрать нельзя."""
     assert "fiverr" not in ALL_SOURCES
-    assert {"kwork", "kwork_com", "freelancer", "peopleperhour", "guru"} <= set(ALL_SOURCES)
+    assert {
+        "upwork", "kwork", "kwork_com", "freelancer", "peopleperhour", "guru"
+    } <= set(ALL_SOURCES)
 
 
 def test_kwork_is_available_now() -> None:
@@ -35,16 +36,16 @@ def test_kwork_is_available_now() -> None:
     kwork = get_source("kwork")
     assert kwork is not None
     assert kwork.available is True
-    assert "скоро" not in kwork.button_label
+    assert "нет парсера" not in kwork.button_label
     assert is_available("kwork") is True
 
 
-def test_unavailable_source_is_marked_as_soon() -> None:
-    """Механизм «площадка в реестре, но парсера ещё нет» должен работать."""
+def test_source_without_parser_is_marked_in_label() -> None:
+    """Механизм «площадка в реестре, но парсера нет» должен работать."""
     from core.sources import Source
 
     planned = Source("future", "🆕 Новая биржа", available=False)
-    assert "скоро" in planned.button_label
+    assert "нет парсера" in planned.button_label
     assert is_available("future") is False
 
 

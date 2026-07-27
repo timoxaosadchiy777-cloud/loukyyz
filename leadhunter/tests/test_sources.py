@@ -40,12 +40,26 @@ def test_all_requested_exchanges_are_registered() -> None:
             "peopleperhour", "guru", "weworkremotely"} <= registered
 
 
-def test_upwork_and_fiverr_are_marked_unavailable_with_reason() -> None:
-    """Не заглушки: у площадок нет публичной ленты заказов, и это сказано."""
-    for source_id in ("upwork", "fiverr"):
-        source = get_source(source_id)
-        assert source.available is False
-        assert source.note, f"{source_id}: причина не указана"
+def test_fiverr_is_marked_unavailable_with_reason() -> None:
+    """Не заглушка: у площадки нет публичной ленты заказов, и это сказано."""
+    source = get_source("fiverr")
+    assert source.available is False
+    assert source.note, "fiverr: причина не указана"
+
+
+def test_upwork_is_available_and_asks_for_its_feed() -> None:
+    """Upwork работает через RSS сохранённого поиска — экран подсказывает переменную."""
+    source = get_source("upwork")
+    assert source.available is True
+    assert source.default_enabled is True
+    assert source.needs == "UPWORK_RSS_URL"
+
+
+def test_default_enabled_matches_registry() -> None:
+    """Умолчания: всё с парсером, кроме RSS-джоб-борда."""
+    assert set(default_enabled_ids()) == {
+        "upwork", "kwork", "kwork_com", "freelancer", "peopleperhour", "guru"
+    }
 
 
 def test_weworkremotely_is_off_by_default() -> None:
@@ -103,8 +117,8 @@ async def test_explicit_choice_survives_new_source_in_registry(db) -> None:
 
 
 async def test_unavailable_source_never_enabled(db) -> None:
-    await db.set_source_enabled(USER, "upwork", True)
-    assert "upwork" not in await db.get_enabled_sources(USER)
+    await db.set_source_enabled(USER, "fiverr", True)
+    assert "fiverr" not in await db.get_enabled_sources(USER)
 
 
 async def test_settings_carry_resolved_sources(db) -> None:

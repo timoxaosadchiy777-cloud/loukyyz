@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-from core.sources import ALL_SOURCES
 from core.runtime_config import LlmConfig, RuntimeConfig, RuntimeConfigStore
 
 
@@ -15,7 +14,10 @@ def test_autocreate_and_defaults(tmp_path) -> None:
     cfg = store.current()
     assert cfg.min_score == 60
     assert cfg.min_budget == 50
-    assert set(cfg.enabled_sources) == set(ALL_SOURCES)
+    # Пусто = ничего не запрещаем: биржи выбирают пользователи в боте, а новая
+    # площадка в реестре не должна оказаться «не перечисленной» в старом файле.
+    assert cfg.enabled_sources == ()
+    assert cfg.source_enabled("upwork") is True
 
 
 def test_reads_existing_values(tmp_path) -> None:
