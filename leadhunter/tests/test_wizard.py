@@ -48,14 +48,21 @@ async def test_start_without_access_shows_id_not_wizard(msg, bot_db, access, rec
 # --- Шаг «Биржи» ----------------------------------------------------------
 
 
-async def test_kwork_is_shown_but_not_selectable(cq, msg, bot_db, access, rec, fsm) -> None:
-    """Kwork занимает место в UI заранее — включить нельзя, парсера нет."""
+async def test_kwork_is_selectable(cq, msg, bot_db, access, rec, fsm) -> None:
+    """Парсер Kwork готов — площадка выбирается как обычная."""
     await on_start(msg(), bot_db, access, fsm)
-    assert any("Kwork" in text and "скоро" in text for text in labels(rec.last_markup))
+    assert any("Kwork" in text and "скоро" not in text for text in labels(rec.last_markup))
 
-    await on_soon(cq(), ToggleAction(kind="soon", value="kwork", ctx=CTX_WIZARD))
+    await on_toggle(
+        cq(), ToggleAction(kind="src", value="kwork", ctx=CTX_WIZARD), bot_db, access
+    )
+    assert "kwork" not in (await bot_db.get_user_settings(USER)).sources
+
+
+async def test_planned_source_reports_soon(cq, rec) -> None:
+    """Кнопка-заглушка для площадки без парсера ничего не меняет."""
+    await on_soon(cq(), ToggleAction(kind="soon", value="future", ctx=CTX_WIZARD))
     assert texts.SOURCE_SOON in rec.alerts
-    assert (await bot_db.get_user_settings(USER)).sources == ()
 
 
 async def test_toggle_source_persists_and_redraws(cq, bot_db, access, rec) -> None:
@@ -64,7 +71,9 @@ async def test_toggle_source_persists_and_redraws(cq, bot_db, access, rec) -> No
     )
 
     # Первое выключение = «все, кроме этой».
-    assert (await bot_db.get_user_settings(USER)).sources == ("upwork", "fiverr")
+    assert (await bot_db.get_user_settings(USER)).sources == (
+        "upwork", "fiverr", "kwork", "kwork_com",
+    )
     assert any("▫️ 🌐 RSS" in text for text in labels(rec.last_markup))
 
 

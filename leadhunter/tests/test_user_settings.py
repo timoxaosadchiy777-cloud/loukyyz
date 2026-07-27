@@ -24,17 +24,25 @@ def _order(**kwargs) -> Order:
 
 
 def test_all_sources_are_only_available_ones() -> None:
-    assert ALL_SOURCES == ("upwork", "fiverr", "rss")
-    assert "kwork" not in ALL_SOURCES
+    assert ALL_SOURCES == ("upwork", "fiverr", "rss", "kwork", "kwork_com")
 
 
-def test_kwork_is_registered_but_not_available() -> None:
-    """Kwork занимает место в UI заранее, но включить его нельзя."""
+def test_kwork_is_available_now() -> None:
+    """Парсер Kwork реализован — площадка выбирается как обычная."""
     kwork = get_source("kwork")
     assert kwork is not None
-    assert kwork.available is False
-    assert "скоро" in kwork.button_label
-    assert is_available("kwork") is False
+    assert kwork.available is True
+    assert "скоро" not in kwork.button_label
+    assert is_available("kwork") is True
+
+
+def test_unavailable_source_is_marked_as_soon() -> None:
+    """Механизм «площадка в реестре, но парсера ещё нет» должен работать."""
+    from core.sources import Source
+
+    planned = Source("future", "🆕 Новая биржа", available=False)
+    assert "скоро" in planned.button_label
+    assert is_available("future") is False
 
 
 def test_runtime_config_reuses_same_registry() -> None:
@@ -71,7 +79,7 @@ def test_new_user_is_not_onboarded() -> None:
 def test_toggle_source_starts_from_all() -> None:
     """Первое выключение трактуется как «все, кроме этой»."""
     settings = UserSettings().toggled_source("rss")
-    assert settings.sources == ("upwork", "fiverr")
+    assert settings.sources == ("upwork", "fiverr", "kwork", "kwork_com")
     assert settings.source_enabled("rss") is False
     assert settings.source_enabled("upwork") is True
 
@@ -82,7 +90,7 @@ def test_toggle_source_back_on() -> None:
 
 
 def test_toggle_unavailable_source_is_ignored() -> None:
-    settings = UserSettings().toggled_source("kwork")
+    settings = UserSettings().toggled_source("нет-такой-биржи")
     assert settings.sources == ()
 
 

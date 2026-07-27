@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from core.sources import ALL_SOURCES
 from core.runtime_config import LlmConfig, RuntimeConfig, RuntimeConfigStore
 
 
@@ -14,7 +15,7 @@ def test_autocreate_and_defaults(tmp_path) -> None:
     cfg = store.current()
     assert cfg.min_score == 60
     assert cfg.min_budget == 50
-    assert set(cfg.enabled_sources) == {"upwork", "fiverr", "rss"}
+    assert set(cfg.enabled_sources) == set(ALL_SOURCES)
 
 
 def test_reads_existing_values(tmp_path) -> None:
