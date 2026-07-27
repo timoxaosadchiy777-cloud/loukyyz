@@ -96,6 +96,12 @@ class UserSettings:
         haystack = text.casefold()
         return any(word.casefold() in haystack for word in self.keywords)
 
+    def technology_matches(self, technology: str) -> bool:
+        """Стек от ИИ — дополнительный шанс совпасть по ключевым словам."""
+        if not self.keywords or not technology:
+            return False
+        return self.keyword_matches(technology)
+
     def budget_matches(self, budget_value: int | None) -> bool:
         # Лид без распознанной суммы не отсекаем — иначе теряем хорошие заказы,
         # где бюджет обсуждается в переписке.
@@ -103,14 +109,34 @@ class UserSettings:
             return True
         return budget_value >= self.min_budget
 
-    def matches(self, order: Order) -> bool:
-        """Проходит ли лид все персональные фильтры сразу."""
+    def prematches(self, order: Order) -> bool:
+        """Дешёвый предфильтр ДО обращения к ИИ (см. :mod:`core.fanout`).
+
+        Проверяет только то, что известно из сырого лида: биржу, бюджет и
+        ключевые слова в заголовке/описании. Категорию здесь проверить нельзя —
+        её ещё не определил ИИ, поэтому на этой стадии она не ограничивает.
+        """
         return (
             self.source_enabled(order.source)
             and self.budget_matches(order.budget_value)
-            and self.category_matches(order.category)
             and self.keyword_matches(f"{order.title}\n{order.description}")
         )
+
+    def matches(self, order: Order) -> bool:
+        """Полный фильтр: предфильтр плюс признаки, добытые ИИ.
+
+        Ключевые слова могут совпасть либо с текстом заказа, либо со стеком,
+        который распознал ИИ («python» в technology при описании без этого слова).
+        """
+        if not (
+            self.source_enabled(order.source)
+            and self.budget_matches(order.budget_value)
+            and self.category_matches(order.category)
+        ):
+            return False
+        return self.keyword_matches(
+            f"{order.title}\n{order.description}"
+        ) or self.technology_matches(order.technology)
 
     # --- Изменение (dataclass frozen → возвращаем новый объект) ------------
 

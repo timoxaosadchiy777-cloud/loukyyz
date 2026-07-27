@@ -27,6 +27,7 @@ from bot.alerts import Alerter
 from bot.bot import create_bot, create_dispatcher, push_card
 from config import Settings, get_settings
 from core.decision import apply_score, decide
+from core.fanout import Recipient, prefilter, select
 from core.filters import parse_budget
 from core.logging import setup_logging
 from core.models import CrmStatus, Order
@@ -89,12 +90,34 @@ async def handle_order(
         await db.save_order(order, response="", status="filtered")
         return
 
-    # 3. AI Lead Scoring — оценка релевантности по смыслу, profile.md, бюджету.
-    log.info("AI scoring lead %s", order.external_id)
+    # 3. Получатели: владелец + все пользователи с доступом, каждый со своими
+    #    фильтрами. У владельца фильтров обычно нет — дефолтные пропускают всё,
+    #    поэтому он получает лиды ровно как до fan-out.
+    recipients = await load_recipients(db, settings.owner_id)
+    if not recipients:
+        log.warning("Некому отправлять %s: нет ни владельца, ни пользователей", order.dedup_key)
+        await db.save_order(order, response="", status="filtered")
+        return
+
+    # 4. Стадия 1 — дешёвый отбор БЕЗ ИИ: биржа, бюджет, слова в тексте лида.
+    #    Если лид не нужен никому, он не стоит нам ни одного запроса к модели.
+    candidates = prefilter(recipients, order)
+    if not candidates:
+        log.info(
+            "Пропуск %s: не подходит никому из %s получателей (ИИ не вызывался)",
+            order.dedup_key,
+            len(recipients),
+        )
+        await db.save_order(order, response="", status="filtered")
+        return
+
+    # 5. AI Lead Scoring — ОДИН запрос на лид, независимо от числа получателей.
+    #    Категория/стек/суть объективны, поэтому переиспользуются для всех.
+    log.info("AI scoring lead %s (кандидатов: %s)", order.external_id, len(candidates))
     lead_score = await scorer.score(order)
     apply_score(order, lead_score)
 
-    # 4. Decision — пускать ли заказ дальше.
+    # 6. Decision — пускать ли заказ дальше (глобальный порог качества).
     decision = decide(lead_score, min_score=cfg.min_score)
     decision_label = "send" if decision else ("reject" if decision is False else "manual")
     # Явные, читаемые логи скоринга (именно AI scoring, а не «генерирую отклик»).
@@ -119,8 +142,25 @@ async def handle_order(
             key="ai-scoring-failure",
         )
 
-    # 5. Response — отклик генерируем ТОЛЬКО для прошедших порог лидов.
-    #    Экономия: слабые лиды и ручной режим не тратят второй запрос к модели.
+    # 7. Стадия 2 — добираем то, что стало известно от ИИ: категорию и стек.
+    if manual_mode:
+        # ИИ не ответил: категорию сверять нечем, поэтому доверяем стадии 1.
+        matched = candidates
+    else:
+        matched = select(candidates, order)
+    if not matched:
+        log.info(
+            "Отсеян по персональным фильтрам %s (категория '%s' никому не подошла)",
+            order.dedup_key,
+            order.category,
+        )
+        await db.save_order(order, response="", status="filtered")
+        return
+
+    # 8. Response — ОДИН отклик на лид, и только когда есть кому его отправить.
+    #    Профиль исполнителя (profile.md) общий, поэтому отдельный запрос на
+    #    каждого получателя дал бы одинаковый текст и лишние вызовы API.
+    #    Каждому кладём свою копию — её можно переписать, не задев остальных.
     if manual_mode:
         response = (
             f"{_MANUAL_FALLBACK}\nПричина: {llm.last_error or 'AI недоступен'}"
@@ -136,7 +176,7 @@ async def handle_order(
                 key="ai-response-failure",
             )
 
-    # 6. SQLite — сохранение с оценкой и статусом воронки NEW.
+    # 9. SQLite — сохранение с оценкой и статусом воронки NEW.
     order_id = await db.save_order(
         order, response=response, status="new", crm_status=CrmStatus.NEW
     )
@@ -144,11 +184,53 @@ async def handle_order(
         log.debug("Гонка дедупликации, карточка не отправлена: %s", order.dedup_key)
         return
 
-    # 7. Telegram — доставка карточки владельцу.
-    if settings.owner_id:
-        await push_card(bot, settings.owner_id, order, response, order_id)
-    else:
-        log.warning("OWNER_ID не задан — карточка %s не отправлена", order.dedup_key)
+    # 10. Telegram — карточка каждому подошедшему получателю.
+    delivered = await deliver(bot, db, matched, order, response, order_id)
+    log.info("Доставлено %s из %s получателей: %s", delivered, len(matched), order.dedup_key)
+
+
+async def load_recipients(db: Database, owner_id: int) -> list[Recipient]:
+    """Владелец плюс все пользователи с доступом, каждый со своими фильтрами."""
+    user_ids = await db.list_active_user_ids()
+    if owner_id:
+        # Владелец первым и без дубля, даже если он же есть в users.
+        user_ids = [owner_id] + [uid for uid in user_ids if uid != owner_id]
+    return [Recipient(uid, await db.get_user_settings(uid)) for uid in user_ids]
+
+
+async def deliver(
+    bot,
+    db: Database,
+    recipients: list[Recipient],
+    order: Order,
+    response: str,
+    order_id: int,
+) -> int:
+    """Рассылает карточку получателям. Возвращает число доставленных.
+
+    Доставку помечаем ДО отправки: строка в ``lead_deliveries`` резервирует
+    лид за пользователем, поэтому повторно он его не получит. Ошибка отправки
+    (пользователь заблокировал бота) не должна ронять рассылку остальным.
+    """
+    delivered = 0
+    for recipient in recipients:
+        if not await db.mark_delivered(recipient.telegram_id, order_id, response):
+            log.debug(
+                "Пропуск доставки %s: пользователь %s уже получал этот лид",
+                order.dedup_key,
+                recipient.telegram_id,
+            )
+            continue
+        try:
+            await push_card(bot, recipient.telegram_id, order, response, order_id)
+            delivered += 1
+        except Exception:
+            log.exception(
+                "Не удалось отправить карточку %s пользователю %s",
+                order.dedup_key,
+                recipient.telegram_id,
+            )
+    return delivered
 
 
 async def process_orders(
@@ -209,7 +291,7 @@ async def main() -> None:
     responder = Responder(llm, settings, profile)
 
     bot = create_bot(settings)
-    dp = create_dispatcher(db, settings)
+    dp = create_dispatcher(db, settings, responder)
     alerter = Alerter(bot, settings.owner_id, settings.alert_cooldown)
 
     # Ленивый импорт: feedparser нужен только для реального запуска парсера,
