@@ -296,16 +296,22 @@ async def main() -> None:
     # Подсказки команд в синей кнопке Telegram (владельцу — ещё и админские).
     await setup_commands(bot, settings.owner_id)
 
-    # Ленивый импорт: feedparser нужен только для реального запуска парсера,
-    # поэтому держим его здесь — модуль main остаётся импортируемым без feedparser.
-    from parsers.rss_parser import RssParser
+    # Парсеры собираются по реестру источников: подключить биржу = строка в
+    # core/sources.py. Импорт ленивый, поэтому отсутствие зависимости одного
+    # источника не мешает остальным (см. parsers/registry.py).
+    from parsers.registry import build_parsers
 
-    queue: "asyncio.Queue[Order]" = asyncio.Queue()
-    rss = RssParser(queue, settings, alerter)
+    queue: "asyncio.Queue[Order]" = asyncio.Queue(maxsize=settings.queue_maxsize)
+    parsers = build_parsers(
+        queue, settings, alerter, enabled_sources=config.current().enabled_sources
+    )
 
     tasks = [
         asyncio.create_task(dp.start_polling(bot), name="bot"),
-        asyncio.create_task(rss.run_safe(), name="rss"),
+        *[
+            asyncio.create_task(parser.run_safe(), name=f"parser:{parser.name}")
+            for parser in parsers
+        ],
         asyncio.create_task(
             process_orders(
                 queue,
@@ -328,9 +334,23 @@ async def main() -> None:
         log.info("Остановка LeadHunter…")
         for task in tasks:
             task.cancel()
-        await responder.aclose()
-        await db.close()
-        await bot.session.close()
+        # Дожидаемся отмены, иначе задачи продолжат жить на закрытых ресурсах.
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for parser in parsers:
+            closer = getattr(parser, "aclose", None)
+            if closer is not None:
+                await _quiet(closer())
+        await _quiet(responder.aclose())
+        await _quiet(db.close())
+        await _quiet(bot.session.close())
+
+
+async def _quiet(awaitable) -> None:
+    """Закрывает ресурс, не позволяя сбою одного помешать остальным."""
+    try:
+        await awaitable
+    except Exception:  # noqa: BLE001 — при остановке важно закрыть всё
+        log.debug("Ошибка при закрытии ресурса", exc_info=True)
 
 
 if __name__ == "__main__":

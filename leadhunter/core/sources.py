@@ -25,23 +25,31 @@ class Source:
         id: Идентификатор источника — совпадает с ``Order.source``.
         label: Человекочитаемое название для кнопок и экранов.
         available: Есть ли рабочий парсер. ``False`` → «скоро», выбрать нельзя.
+        factory: Путь к фабрике парсера — ``"модуль:функция"``. Импортируется
+            лениво, поэтому тяжёлые зависимости источника не тянутся, пока он
+            не понадобился. Пустая строка = источник без собственного парсера.
     """
 
     id: str
     label: str
     available: bool = True
+    factory: str = ""
 
     @property
     def button_label(self) -> str:
         return self.label if self.available else f"{self.label} (скоро)"
 
 
+# Подключить новую биржу = добавить строку сюда и написать фабрику
+# `build(queue, settings, alerter, source) -> BaseParser | None`.
+# Всё остальное — мастер настройки, фильтры, меню «Биржи», валидация
+# settings.yaml — подхватит её автоматически.
 SOURCES: tuple[Source, ...] = (
     Source("upwork", "💼 Upwork"),
     Source("fiverr", "🛒 Fiverr"),
-    Source("rss", "🌐 RSS / джоб-борды"),
-    # Фаза 4: нужен Playwright и залогиненная сессия — парсера пока нет.
-    Source("kwork", "🇷🇺 Kwork", available=False),
+    Source("rss", "🌐 RSS / джоб-борды", factory="parsers.rss_parser:build"),
+    Source("kwork", "🇷🇺 Kwork", factory="parsers.kwork_parser:build"),
+    Source("kwork_com", "🌍 Kwork.com", factory="parsers.kwork_parser:build"),
 )
 
 # Источники с рабочим парсером. Именно они допустимы в settings.yaml и в

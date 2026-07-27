@@ -91,6 +91,24 @@ class Settings(BaseSettings):
     )
     feed_poll_interval: int = Field(300, alias="FEED_POLL_INTERVAL")
 
+    # --- Kwork (kwork.ru и kwork.com) ---
+    # Выключен по умолчанию: без явного включения ничего не парсим.
+    kwork_enabled: bool = Field(False, alias="KWORK_ENABLED")
+    kwork_ru_url: str = Field("https://kwork.ru", alias="KWORK_RU_URL")
+    kwork_com_url: str = Field("https://kwork.com", alias="KWORK_COM_URL")
+    kwork_projects_path: str = Field("/projects", alias="KWORK_PROJECTS_PATH")
+    # Сессионная кука: без неё видна только публичная выдача (лидов меньше).
+    # Как получить — см. README, раздел «Kwork».
+    kwork_cookie: str = Field("", alias="KWORK_COOKIE")
+    kwork_com_cookie: str = Field("", alias="KWORK_COM_COOKIE")
+    kwork_poll_interval: int = Field(300, alias="KWORK_POLL_INTERVAL")
+    kwork_pages: int = Field(1, alias="KWORK_PAGES")
+    kwork_timeout: float = Field(20.0, alias="KWORK_TIMEOUT")
+
+    # Курс для приведения рублёвых бюджетов к порогу в долларах. Приблизительный:
+    # нужен только для отсечки, в карточке всегда показана исходная сумма.
+    usd_rub_rate: float = Field(95.0, alias="USD_RUB_RATE")
+
     # --- AI Lead Scoring ---
     # Профиль исполнителя: ИИ читает его и по смыслу оценивает заказы.
     profile_path: str = Field("profile.md", alias="PROFILE_PATH")
@@ -101,6 +119,9 @@ class Settings(BaseSettings):
     # --- Прочее ---
     database_path: str = Field("leadhunter.db", alias="DATABASE_PATH")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
+    # Очередь ограничена намеренно: если ИИ тормозит, парсеры притормозят вместе
+    # с ним, а не будут набивать память лидами до OOM.
+    queue_maxsize: int = Field(1000, alias="QUEUE_MAXSIZE")
 
     @field_validator("feeds", mode="before")
     @classmethod

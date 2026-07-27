@@ -162,3 +162,15 @@ def _source_from_url(url: str) -> str:
 
 def _host(url: str) -> str:
     return (urlparse(url).hostname or url).lower()
+
+
+def build(queue, settings: Settings, alerter: Alerter | None, source) -> "RssParser | None":
+    """Фабрика для реестра источников (см. :mod:`parsers.registry`).
+
+    RSS обслуживает сразу upwork/fiverr/rss — конкретный источник определяется
+    по хосту фида, поэтому парсер создаётся один раз на запись 'rss'.
+    """
+    if not settings.feeds:
+        log.warning("RSS-парсер не запущен: список FEEDS пуст.")
+        return None
+    return RssParser(queue, settings, alerter)
