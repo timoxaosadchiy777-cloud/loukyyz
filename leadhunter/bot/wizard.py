@@ -20,6 +20,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from bot import texts
 from bot.access import AccessControl
 from bot.callbacks import (
     CTX_SETTINGS,
@@ -95,7 +96,7 @@ async def on_wizard_step(
     state: FSMContext,
 ) -> None:
     if not await access.has_access(query.from_user.id):
-        await query.answer("Нет доступа", show_alert=True)
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
         return
 
     settings = await db.get_user_settings(query.from_user.id)
@@ -113,7 +114,8 @@ async def on_wizard_step(
         await db.save_user_settings(
             query.from_user.id, settings.replace(onboarded=True)
         )
-        text, markup = render_menu(settings.replace(onboarded=True))
+        done = settings.replace(onboarded=True)
+        text, markup = render_menu(done, await db.user_stats(query.from_user.id))
         await show_screen(query, text, markup)
         await query.answer("Готово! Фильтры сохранены ✅")
         return
@@ -128,7 +130,7 @@ async def on_wizard_step(
 @wizard_router.callback_query(ToggleAction.filter(F.kind == "soon"))
 async def on_soon(query: CallbackQuery, callback_data: ToggleAction) -> None:
     """Площадка есть в реестре, но парсера ещё нет."""
-    await query.answer("Эта биржа скоро появится", show_alert=True)
+    await query.answer(texts.SOURCE_SOON, show_alert=True)
 
 
 @wizard_router.callback_query(ToggleAction.filter())
@@ -139,7 +141,7 @@ async def on_toggle(
     access: AccessControl,
 ) -> None:
     if not await access.has_access(query.from_user.id):
-        await query.answer("Нет доступа", show_alert=True)
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
         return
 
     settings = await db.get_user_settings(query.from_user.id)
@@ -179,7 +181,7 @@ async def on_budget(
     access: AccessControl,
 ) -> None:
     if not await access.has_access(query.from_user.id):
-        await query.answer("Нет доступа", show_alert=True)
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
         return
 
     settings = await db.get_user_settings(query.from_user.id)

@@ -1,6 +1,6 @@
 """Панель управления пользователя.
 
-Меню: ⚙️ Настройки · 🔍 Проверить сейчас · ⭐ Сохранённые лиды · 🌐 Биржи.
+Меню: ⚙️ Настройки · 🔍 Проверить сейчас · ⭐ Сохранённые · 🌐 Биржи · ❓ Справка.
 Экраны правки фильтров переиспользуются из мастера (:mod:`bot.wizard`).
 """
 
@@ -13,6 +13,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
+from bot import texts
 from bot.access import AccessControl
 from bot.callbacks import CTX_SETTINGS, EditAction, MenuAction
 from bot.screens import (
@@ -48,7 +49,7 @@ async def on_menu_command(
     # сообщение пользователя молча уйдёт в фильтр.
     await state.clear()
     settings = await db.get_user_settings(user.id)
-    text, markup = render_menu(settings)
+    text, markup = render_menu(settings, await db.user_stats(user.id))
     await message.answer(text, reply_markup=markup)
 
 
@@ -60,14 +61,14 @@ async def on_menu_action(
     access: AccessControl,
 ) -> None:
     if not await access.has_access(query.from_user.id):
-        await query.answer("Нет доступа", show_alert=True)
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
         return
 
     settings = await db.get_user_settings(query.from_user.id)
     action = callback_data.action
 
     if action == "menu":
-        text, markup = render_menu(settings)
+        text, markup = render_menu(settings, await db.user_stats(query.from_user.id))
     elif action == "settings":
         text, markup = render_settings(settings)
     elif action == "sources":
@@ -89,7 +90,7 @@ async def on_menu_action(
         text = render_leads(
             rows,
             title="⭐ Сохранённые лиды",
-            empty="Тут пусто. Сохраняй заказы кнопкой ☆ под карточкой.",
+            empty="Тут пусто. Сохраняй заказы кнопкой ❤️ под карточкой.",
         )
         markup = back_to_menu_keyboard()
     else:
@@ -110,7 +111,7 @@ async def on_edit_field(
     """Правка одного фильтра: те же экраны, что в мастере, но с возвратом
     на экран настроек."""
     if not await access.has_access(query.from_user.id):
-        await query.answer("Нет доступа", show_alert=True)
+        await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
         return
 
     settings = await db.get_user_settings(query.from_user.id)
