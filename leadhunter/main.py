@@ -46,6 +46,12 @@ _MANUAL_FALLBACK = (
     "(Не удалось сгенерировать отклик автоматически — сформулируй вручную по ТЗ.)"
 )
 
+# Ограничение рассылки: Telegram допускает ~30 сообщений в секунду на бота.
+# Держимся заметно ниже потолка — лиды не настолько срочные, чтобы рисковать
+# временным баном на отправку.
+_BURST_SIZE = 20
+_BURST_PAUSE = 1.0
+
 
 async def handle_order(
     order: Order,
@@ -234,6 +240,11 @@ async def deliver(
                 order.dedup_key,
                 recipient.telegram_id,
             )
+        # Telegram режет отправку примерно на 30 сообщениях в секунду и за
+        # превышение временно банит бота. Рассылка на десятки получателей без
+        # паузы упирается в этот лимит, поэтому раздвигаем её во времени.
+        if delivered and delivered % _BURST_SIZE == 0:
+            await asyncio.sleep(_BURST_PAUSE)
     return delivered
 
 

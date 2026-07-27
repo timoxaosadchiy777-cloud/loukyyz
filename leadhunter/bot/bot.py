@@ -155,6 +155,19 @@ async def personal_card(db: Database, user_id: int, row) -> tuple[str, object]:
     )
 
 
+async def _may_touch(
+    db: Database, access: AccessControl, user_id: int, order_id: int
+) -> bool:
+    """Имеет ли пользователь право на действия с этим лидом.
+
+    Право даёт факт доставки. Владельцу разрешаем всё: у лидов, пришедших до
+    fan-out, записи о доставке нет, и иначе он потерял бы к ним доступ.
+    """
+    if access.is_admin(user_id) or access.dev_mode:
+        return True
+    return await db.was_delivered(user_id, order_id)
+
+
 async def _redraw_card(query: CallbackQuery, db: Database, row) -> None:
     text, markup = await personal_card(db, query.from_user.id, row)
     if isinstance(query.message, Message):
@@ -183,6 +196,13 @@ async def on_order_action(
     user_id = query.from_user.id
     row = await db.get_order(order_id)
     if row is None:
+        await query.answer(texts.ERR_ORDER_GONE, show_alert=True)
+        return
+
+    # order_id приходит из callback_data, то есть от клиента. Без этой проверки
+    # любой пользователь с доступом мог перебором id вытащить текст и отклик
+    # чужого лида — включая тот, что его фильтры не пропустили.
+    if not await _may_touch(db, access, user_id, order_id):
         await query.answer(texts.ERR_ORDER_GONE, show_alert=True)
         return
 
@@ -314,6 +334,10 @@ async def on_crm_action(
         await query.answer(texts.ERR_ORDER_GONE, show_alert=True)
         return
 
+    if not await _may_touch(db, access, query.from_user.id, callback_data.order_id):
+        await query.answer(texts.ERR_ORDER_GONE, show_alert=True)
+        return
+
     # Статус воронки персональный: под fan-out один заказ ведут независимо
     # несколько человек, и общий crm_status затирал бы чужой прогресс.
     await db.set_delivery_crm(query.from_user.id, callback_data.order_id, status)
@@ -380,7 +404,7 @@ def create_dispatcher(
     # Зависимости прокидываются в хендлеры по имени аргумента.
     dp["db"] = db
     dp["owner_id"] = settings.owner_id
-    dp["access"] = AccessControl(db, settings.owner_id)
+    dp["access"] = AccessControl(db, settings.owner_id, settings.dev_mode)
     # Нужен кнопке «🔄 Сгенерировать заново»; без него она честно скажет,
     # что генерация недоступна.
     dp["responder"] = responder

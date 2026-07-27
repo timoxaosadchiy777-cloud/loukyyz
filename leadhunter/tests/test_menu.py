@@ -167,6 +167,7 @@ async def test_saved_is_empty_by_default(cq, bot_db, access, rec) -> None:
 
 async def test_save_lead_from_card_then_see_it_in_menu(cq, bot_db, access, rec, fsm) -> None:
     order_id = await bot_db.save_order(_order(), response="r", status="new")
+    await bot_db.mark_delivered(USER, order_id, "r")
 
     await on_order_action(
         cq(), OrderAction(action="save", order_id=order_id), bot_db, access, fsm
@@ -202,6 +203,7 @@ async def test_saved_leads_are_not_shared_between_users(cq, bot_db, access, rec)
 
 async def test_card_save_button_reflects_state(cq, bot_db, access, rec, fsm) -> None:
     order_id = await bot_db.save_order(_order(), response="r", status="new")
+    await bot_db.mark_delivered(USER, order_id, "r")
 
     await on_order_action(
         cq(), OrderAction(action="save", order_id=order_id), bot_db, access, fsm

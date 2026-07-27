@@ -43,7 +43,10 @@ def responder() -> _Responder:
 
 
 async def _make_order(db, response: str = "общий черновик") -> int:
-    return await db.save_order(_order(), response=response, status="new")
+    """Заказ, доставленный USER: право на действия даёт именно факт доставки."""
+    order_id = await db.save_order(_order(), response=response, status="new")
+    await db.mark_delivered(USER, order_id, response)
+    return order_id
 
 
 # --- Кнопки, которых требует ТЗ -------------------------------------------

@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     # --- Aiogram-бот (доставка карточек владельцу) ---
     bot_token: str = Field("", alias="BOT_TOKEN")
     owner_id: int = Field(0, alias="OWNER_ID")
+    # Открывает доступ ВСЕМ — только для локальной отладки. Без него забытый
+    # OWNER_ID не превращает первого встречного в администратора.
+    dev_mode: bool = Field(False, alias="DEV_MODE")
 
     # --- AI-провайдеры (скоринг и генерация откликов) ---
     # Основной провайдер. Порядок fallback фиксирован: openrouter → groq → ollama
