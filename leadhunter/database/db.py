@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS orders (
     description   TEXT    NOT NULL,
     budget_raw    TEXT,
     budget_value  INTEGER,
+    budget_currency TEXT NOT NULL DEFAULT 'USD',
     response      TEXT,
     status              TEXT    NOT NULL DEFAULT 'new',
     score               INTEGER,
@@ -124,6 +125,8 @@ _MIGRATIONS: dict[str, str] = {
     # LeadHunter 3.0: признаки заказа из общего AI-анализа (один раз на лид).
     "technology": "TEXT NOT NULL DEFAULT ''",
     "summary": "TEXT NOT NULL DEFAULT ''",
+    # Валюта исходного бюджета; budget_value всегда нормализован в USD.
+    "budget_currency": "TEXT NOT NULL DEFAULT 'USD'",
 }
 
 # Колонки users, добавленные после первого релиза мультиюзера.
@@ -224,10 +227,10 @@ class Database:
             """
             INSERT OR IGNORE INTO orders
                 (source, external_id, title, url, description,
-                 budget_raw, budget_value, response, status,
+                 budget_raw, budget_value, budget_currency, response, status,
                  score, category, reason, probability_of_sale,
-                 should_send, crm_status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 should_send, technology, summary, crm_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 order.source,
@@ -237,6 +240,7 @@ class Database:
                 order.description,
                 order.budget_raw,
                 order.budget_value,
+                order.budget_currency,
                 response,
                 status,
                 order.score,
@@ -244,6 +248,8 @@ class Database:
                 order.reason,
                 order.probability_of_sale,
                 should_send,
+                order.technology,
+                order.summary,
                 crm_status,
                 order.created_at.isoformat(),
             ),

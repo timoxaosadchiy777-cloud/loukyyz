@@ -82,7 +82,10 @@ class Order:
     url: str
     description: str
     budget_raw: str = ""
+    # ВСЕГДА в USD: площадки отдают разные валюты, а порог у пользователя один.
+    # Исходная строка остаётся в budget_raw и показывается в карточке как есть.
     budget_value: int | None = None
+    budget_currency: str = "USD"
     created_at: datetime = field(default_factory=_utcnow)
     # --- AI Lead Scoring ---
     score: int | None = None
@@ -118,6 +121,7 @@ class Order:
             description=row["description"],
             budget_raw=row["budget_raw"] or "",
             budget_value=row["budget_value"],
+            budget_currency=_column(row, "budget_currency") or "USD",
             score=row["score"],
             category=row["category"] or "",
             reason=row["reason"] or "",
