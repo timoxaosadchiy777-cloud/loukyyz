@@ -11,7 +11,7 @@ AI-оценки (score / category / reason / should_send) и статусов:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -750,6 +750,12 @@ class Database:
 
         Старый формат — CSV, где пустая строка означала «все включены».
         Переносим только непустой выбор: он был осознанным.
+
+        Перенос — РОВНО ОДИН раз, поэтому legacy-колонка сразу очищается.
+        Без этого миграция повторялась бы на каждом старте и гасила каждую
+        новую биржу реестра: её нет в списке, записанном полгода назад, значит
+        ей выставлялось enabled=0 — и биржа молча не работала у всех, кто
+        обновился. Снимок выбора имеет смысл только на момент переезда.
         """
         cur = await self._connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='user_settings'"
@@ -779,9 +785,15 @@ class Database:
                     (row["telegram_id"], source.id, int(source.id in picked), _utcnow_iso()),
                 )
                 moved += cur.rowcount
+
+        await self._connection.execute("UPDATE user_settings SET sources = ''")
+        await self._connection.commit()
         if moved:
-            await self._connection.commit()
-            log.info("Миграция БД: перенесён выбор бирж (%s записей)", moved)
+            log.info(
+                "Миграция БД: перенесён выбор бирж (%s записей, пользователей %s). "
+                "Проверьте список в боте: ⚙️ Настройки → 🌐 Биржи",
+                moved, len(rows),
+            )
 
     async def list_active_user_ids(self) -> list[int]:
         """Кому рассылать лиды: все пользователи с доступом.
@@ -794,14 +806,32 @@ class Database:
         )
         return [row["telegram_id"] for row in await cur.fetchall()]
 
-    async def recent_orders(self, limit: int = 100) -> list[aiosqlite.Row]:
+    async def recent_orders(
+        self, limit: int = 100, *, max_age_hours: int = 0
+    ) -> list[aiosqlite.Row]:
         """Последние доставленные лиды — сырьё для «🔍 Проверить сейчас».
 
         Отсеянные пайплайном (rejected/filtered) не возвращаем: пользователь
         ждёт подходящие заказы, а не мусор.
+
+        Args:
+            max_age_hours: Отсечка по времени попадания в базу (0 = без неё).
+                Слово «сейчас» на кнопке обещает свежие заказы, а не всё, что
+                когда-либо накопилось: заказ недельной давности с биржи уже
+                ушёл, и показывать его как подходящий — обман.
         """
-        cur = await self._connection.execute(
-            "SELECT * FROM orders WHERE status = 'new' ORDER BY id DESC LIMIT ?",
-            (limit,),
-        )
+        if max_age_hours > 0:
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+            ).isoformat()
+            cur = await self._connection.execute(
+                "SELECT * FROM orders WHERE status = 'new' AND created_at >= ?"
+                " ORDER BY id DESC LIMIT ?",
+                (cutoff, limit),
+            )
+        else:
+            cur = await self._connection.execute(
+                "SELECT * FROM orders WHERE status = 'new' ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
         return list(await cur.fetchall())

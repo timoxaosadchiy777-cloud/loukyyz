@@ -60,6 +60,7 @@ async def on_menu_action(
     db: Database,
     access: AccessControl,
     sources=None,
+    max_lead_age_hours: int = 0,
 ) -> None:
     if not await access.has_access(query.from_user.id):
         await query.answer(texts.ERR_NO_ACCESS, show_alert=True)
@@ -77,7 +78,7 @@ async def on_menu_action(
         await query.answer()
         return
     elif action == "check":
-        rows = await db.recent_orders(limit=_SCAN_LIMIT)
+        rows = await db.recent_orders(limit=_SCAN_LIMIT, max_age_hours=max_lead_age_hours)
         matched = filter_orders(rows, settings, limit=LEADS_LIMIT)
         text = render_leads(
             matched,

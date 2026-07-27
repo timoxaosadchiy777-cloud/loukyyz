@@ -239,3 +239,16 @@ async def test_migration_is_idempotent(tmp_path) -> None:
         await database.connect()
         assert len(await database.list_saved_leads(USER)) == 1
         await database.close()
+
+
+async def test_recent_orders_can_drop_stale_leads(db) -> None:
+    """«Проверить сейчас» не должен показывать заказы, которых на бирже нет."""
+    fresh_id = await db.save_order(_order("fresh"), status="new")
+    old_id = await db.save_order(_order("old"), status="new")
+    await db._connection.execute(
+        "UPDATE orders SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (old_id,)
+    )
+    await db._connection.commit()
+
+    assert [r["id"] for r in await db.recent_orders()] == [old_id, fresh_id]
+    assert [r["id"] for r in await db.recent_orders(max_age_hours=24)] == [fresh_id]

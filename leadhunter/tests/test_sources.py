@@ -166,6 +166,51 @@ async def test_old_csv_choice_is_migrated(tmp_path) -> None:
         await database.close()
 
 
+async def test_migration_runs_once_and_does_not_bury_new_sources(tmp_path) -> None:
+    """Регресс: миграция повторялась на каждом старте и гасила новые биржи.
+
+    Список из прошлой версии — снимок на момент переезда. Биржа, добавленная
+    в реестр позже, в нём отсутствует по определению, и повторный прогон
+    выставлял ей enabled=0: у обновившегося пользователя она молча не работала.
+    """
+    import aiosqlite
+
+    import database.db as db_module
+    from core.sources import Source
+    from core.user_settings import UserSettings
+
+    path = tmp_path / "legacy.db"
+    database = Database(str(path))
+    await database.connect()
+    await database.save_user_settings(USER, UserSettings(onboarded=True))
+    await database.close()
+
+    async with aiosqlite.connect(str(path)) as conn:
+        await conn.execute("UPDATE user_settings SET sources = 'kwork' WHERE telegram_id = ?",
+                           (USER,))
+        await conn.execute("DELETE FROM sources_settings")
+        await conn.commit()
+
+    database = Database(str(path))
+    await database.connect()
+    assert await database.get_enabled_sources(USER) == ("kwork",)
+    await database.close()
+
+    # Биржа, которой на момент переезда не существовало.
+    added = Source("newexchange", "🆕 Новая биржа", factory="parsers.stub:build")
+    original = db_module.SOURCES
+    db_module.SOURCES = original + (added,)
+    try:
+        database = Database(str(path))
+        await database.connect()
+        enabled = await database.get_enabled_sources(USER)
+        assert "newexchange" in enabled  # дошла до пользователя
+        assert "kwork" in enabled        # старый выбор при этом сохранён
+        await database.close()
+    finally:
+        db_module.SOURCES = original
+
+
 # --- Свежесть --------------------------------------------------------------
 
 
