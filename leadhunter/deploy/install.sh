@@ -50,6 +50,11 @@ if [[ "$MODE" == "docker" ]]; then
     fi
     systemctl enable --now docker
 
+    # Каталоги данных монтируются в контейнер, который работает не от root.
+    # Без этого chown первый же запуск упадёт на «read-only database».
+    log "Выставляю владельца каталогов данных (uid контейнера)"
+    chown -R 10001:10001 "$APP_DIR/data" "$APP_DIR/logs"
+
     log "Собираю и запускаю контейнер"
     cd "$APP_DIR"
     docker compose up -d --build

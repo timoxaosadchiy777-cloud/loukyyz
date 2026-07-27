@@ -19,7 +19,10 @@ COPY . .
 # Работаем не от root: если процесс скомпрометируют, он не будет хозяином
 # контейнера. Каталоги данных и логов создаём заранее и отдаём этому же
 # пользователю — иначе том, смонтированный поверх, окажется недоступен на запись.
-RUN useradd --create-home --shell /usr/sbin/nologin leadhunter \
+# UID фиксирован намеренно: каталоги data/ и logs/ монтируются с хоста, и их
+# владелец должен совпадать с пользователем внутри контейнера. Иначе на чистом
+# VPS Docker создаст их от root, а контейнер не сможет писать базу.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin leadhunter \
     && mkdir -p /app/data /app/logs \
     && chown -R leadhunter:leadhunter /app
 

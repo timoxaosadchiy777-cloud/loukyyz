@@ -415,40 +415,55 @@ def test_lead_list_fits_limit() -> None:
 # --- Первый опыт покупателя ------------------------------------------------
 
 
-def test_empty_config_is_explained_not_crashed() -> None:
+def _config(tmp_path, **kwargs):
+    """Заглушка настроек: только то, что читает проверка конфигурации."""
+
+    class _Config:
+        bot_token = kwargs.get("bot_token", "123456:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw")
+        owner_id = kwargs.get("owner_id", 100)
+        dev_mode = kwargs.get("dev_mode", False)
+        database_file = tmp_path / "data" / "leadhunter.db"
+
+    return _Config()
+
+
+def test_empty_config_is_explained_not_crashed(tmp_path) -> None:
     """Покупатель с пустым .env должен получить инструкцию, а не трейсбек."""
     from main import check_configuration
 
-    class _Empty:
-        bot_token = ""
-        owner_id = 0
-        dev_mode = False
-
-    problems = check_configuration(_Empty())
+    problems = check_configuration(_config(tmp_path, bot_token="", owner_id=0))
     assert any("BOT_TOKEN" in p and "@BotFather" in p for p in problems)
     assert any("OWNER_ID" in p and "@userinfobot" in p for p in problems)
 
 
-def test_malformed_token_is_caught_before_start() -> None:
+def test_malformed_token_is_caught_before_start(tmp_path) -> None:
     from main import check_configuration
 
-    class _Bad:
-        bot_token = "просто-строка"
-        owner_id = 100
-        dev_mode = False
-
-    assert any("не похож на токен" in p for p in check_configuration(_Bad()))
+    problems = check_configuration(_config(tmp_path, bot_token="просто-строка"))
+    assert any("не похож на токен" in p for p in problems)
 
 
-def test_valid_config_passes() -> None:
+def test_valid_config_passes(tmp_path) -> None:
     from main import check_configuration
 
-    class _Ok:
+    assert check_configuration(_config(tmp_path)) == []
+
+
+def test_unwritable_data_dir_is_explained(tmp_path) -> None:
+    """Каталог data/ от root + контейнер не от root = типовой сбой на VPS."""
+    from main import check_configuration
+
+    blocker = tmp_path / "файл"
+    blocker.write_text("x", encoding="utf-8")
+
+    class _Config:
         bot_token = "123456:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
         owner_id = 100
         dev_mode = False
+        database_file = blocker / "data" / "lh.db"
 
-    assert check_configuration(_Ok()) == []
+    problems = check_configuration(_Config())
+    assert any("недоступен на запись" in p and "chown" in p for p in problems)
 
 
 async def test_repeat_requests_do_not_flood_admin(

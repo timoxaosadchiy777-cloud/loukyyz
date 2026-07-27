@@ -421,7 +421,29 @@ def check_configuration(settings: Settings) -> list[str]:
             "недоступна. Узнать свой ID: @userinfobot"
         )
 
+    problems.extend(_check_writable(settings.database_file.parent, "базы данных"))
+
     return problems
+
+
+def _check_writable(directory, what: str) -> list[str]:
+    """Проверяет, что в каталог можно писать.
+
+    Частый случай на чистом VPS: каталог data/ создан Docker'ом от root, а
+    контейнер работает от непривилегированного пользователя. Без этой проверки
+    покупатель увидел бы невнятную ошибку SQLite вместо понятной причины.
+    """
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / ".write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        return [
+            f"Каталог {what} недоступен на запись: {directory} ({exc.strerror}). "
+            f"Исправить: sudo chown -R 10001:10001 {directory}"
+        ]
+    return []
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
