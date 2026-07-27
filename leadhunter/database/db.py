@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from core.models import CrmStatus, Order
+from core.models import CrmStatus, LeadState, Order
 from core.user_settings import UserSettings
 
 log = logging.getLogger(__name__)
@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS orders (
     reason              TEXT    NOT NULL DEFAULT '',
     probability_of_sale INTEGER,
     should_send         INTEGER,
+    technology          TEXT    NOT NULL DEFAULT '',
+    summary             TEXT    NOT NULL DEFAULT '',
     crm_status          TEXT    NOT NULL DEFAULT 'new',
     created_at          TEXT    NOT NULL,
     UNIQUE(source, external_id)
@@ -82,11 +84,21 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 """
 
-# Избранные лиды пользователя (кнопка ⭐ под карточкой).
-_SAVED_LEADS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS saved_leads (
+# Доставки лидов конкретным пользователям — ядро fan-out.
+#
+# Одна строка = «этот пользователь уже видел этот лид». Отсюда сразу три вещи:
+#   * дедупликация (PK) — повторно лид тому же человеку не уйдёт;
+#   * личное состояние (sent / saved / rejected) и личный статус воронки —
+#     под fan-out они не могут быть общими на заказ: иначе один пользователь
+#     переводит лид в «Выиграл», и это видят все остальные;
+#   * личный черновик отклика, который можно переписать, не трогая чужие.
+_DELIVERIES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS lead_deliveries (
     telegram_id INTEGER NOT NULL,
     order_id    INTEGER NOT NULL,
+    state       TEXT    NOT NULL DEFAULT 'sent',
+    response    TEXT    NOT NULL DEFAULT '',
+    crm_status  TEXT    NOT NULL DEFAULT 'new',
     created_at  TEXT    NOT NULL,
     PRIMARY KEY (telegram_id, order_id)
 );
@@ -97,7 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_source_ext ON orders(source, external_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status     ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_crm        ON orders(crm_status);
 CREATE INDEX IF NOT EXISTS idx_users_paid        ON users(paid_status);
-CREATE INDEX IF NOT EXISTS idx_saved_user        ON saved_leads(telegram_id);
+CREATE INDEX IF NOT EXISTS idx_deliveries_user   ON lead_deliveries(telegram_id, state);
 """
 
 # Колонки, добавленные в LeadHunter 2.0. Для уже существующих БД (Alembic здесь
@@ -109,6 +121,9 @@ _MIGRATIONS: dict[str, str] = {
     "probability_of_sale": "INTEGER",
     "should_send": "INTEGER",
     "crm_status": "TEXT NOT NULL DEFAULT 'new'",
+    # LeadHunter 3.0: признаки заказа из общего AI-анализа (один раз на лид).
+    "technology": "TEXT NOT NULL DEFAULT ''",
+    "summary": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -131,7 +146,7 @@ class Database:
         await self._conn.executescript(_SCHEMA)
         await self._conn.executescript(_USERS_SCHEMA)  # появляется и на старых БД
         await self._conn.executescript(_USER_SETTINGS_SCHEMA)
-        await self._conn.executescript(_SAVED_LEADS_SCHEMA)
+        await self._conn.executescript(_DELIVERIES_SCHEMA)
         await self._migrate()  # добавляет недостающие колонки (в т.ч. crm_status)
         await self._conn.executescript(_INDEXES)  # индексы — уже по всем колонкам
         await self._conn.commit()
@@ -147,6 +162,30 @@ class Database:
                     f"ALTER TABLE orders ADD COLUMN {name} {ddl}"
                 )
                 log.info("Миграция БД: добавлена колонка %s", name)
+        await self._migrate_saved_leads()
+
+    async def _migrate_saved_leads(self) -> None:
+        """Переносит избранное из saved_leads в lead_deliveries.
+
+        До fan-out избранное лежало отдельной таблицей; теперь это состояние
+        доставки. Старую таблицу не удаляем — на случай отката.
+        """
+        cur = await self._connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='saved_leads'"
+        )
+        if await cur.fetchone() is None:
+            return
+
+        cur = await self._connection.execute(
+            """
+            INSERT OR IGNORE INTO lead_deliveries
+                (telegram_id, order_id, state, response, crm_status, created_at)
+            SELECT telegram_id, order_id, 'saved', '', 'new', created_at
+            FROM saved_leads
+            """
+        )
+        if cur.rowcount:
+            log.info("Миграция БД: перенесено избранное (%s шт.)", cur.rowcount)
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -343,43 +382,119 @@ class Database:
     # Избранные лиды и подбор по фильтрам
     # ------------------------------------------------------------------
 
-    async def save_lead(self, telegram_id: int, order_id: int) -> None:
-        await self._connection.execute(
-            "INSERT OR IGNORE INTO saved_leads (telegram_id, order_id, created_at)"
-            " VALUES (?, ?, ?)",
-            (telegram_id, order_id, _utcnow_iso()),
-        )
-        await self._connection.commit()
+    async def mark_delivered(
+        self, telegram_id: int, order_id: int, response: str = ""
+    ) -> bool:
+        """Фиксирует доставку лида пользователю.
 
-    async def unsave_lead(self, telegram_id: int, order_id: int) -> None:
-        await self._connection.execute(
-            "DELETE FROM saved_leads WHERE telegram_id = ? AND order_id = ?",
-            (telegram_id, order_id),
-        )
-        await self._connection.commit()
-
-    async def is_lead_saved(self, telegram_id: int, order_id: int) -> bool:
+        Returns:
+            ``True`` — доставка новая; ``False`` — этот лид пользователь уже
+            получал (дедупликация fan-out).
+        """
         cur = await self._connection.execute(
-            "SELECT 1 FROM saved_leads WHERE telegram_id = ? AND order_id = ? LIMIT 1",
+            """
+            INSERT OR IGNORE INTO lead_deliveries
+                (telegram_id, order_id, state, response, crm_status, created_at)
+            VALUES (?, ?, 'sent', ?, ?, ?)
+            """,
+            (telegram_id, order_id, response, CrmStatus.NEW, _utcnow_iso()),
+        )
+        await self._connection.commit()
+        return bool(cur.rowcount)
+
+    async def was_delivered(self, telegram_id: int, order_id: int) -> bool:
+        cur = await self._connection.execute(
+            "SELECT 1 FROM lead_deliveries WHERE telegram_id = ? AND order_id = ? LIMIT 1",
             (telegram_id, order_id),
         )
         return await cur.fetchone() is not None
+
+    async def get_delivery(
+        self, telegram_id: int, order_id: int
+    ) -> aiosqlite.Row | None:
+        cur = await self._connection.execute(
+            "SELECT * FROM lead_deliveries WHERE telegram_id = ? AND order_id = ?",
+            (telegram_id, order_id),
+        )
+        return await cur.fetchone()
+
+    async def _upsert_delivery(self, telegram_id: int, order_id: int, **fields) -> None:
+        """Меняет поля доставки, создавая строку, если её ещё нет."""
+        columns = ", ".join(fields)
+        assignments = ", ".join(f"{name} = excluded.{name}" for name in fields)
+        placeholders = ", ".join("?" for _ in fields)
+        await self._connection.execute(
+            f"""
+            INSERT INTO lead_deliveries
+                (telegram_id, order_id, created_at, {columns})
+            VALUES (?, ?, ?, {placeholders})
+            ON CONFLICT(telegram_id, order_id) DO UPDATE SET {assignments}
+            """,
+            (telegram_id, order_id, _utcnow_iso(), *fields.values()),
+        )
+        await self._connection.commit()
+
+    async def set_delivery_state(
+        self, telegram_id: int, order_id: int, state: str
+    ) -> None:
+        """Личное состояние лида: ``sent`` / ``saved`` / ``rejected``."""
+        await self._upsert_delivery(telegram_id, order_id, state=state)
+
+    async def set_delivery_response(
+        self, telegram_id: int, order_id: int, response: str
+    ) -> None:
+        """Личный черновик отклика — правка не задевает других получателей."""
+        await self._upsert_delivery(telegram_id, order_id, response=response)
+
+    async def set_delivery_crm(
+        self, telegram_id: int, order_id: int, crm_status: str
+    ) -> None:
+        """Личный статус воронки: под fan-out он не может быть общим на заказ."""
+        await self._upsert_delivery(telegram_id, order_id, crm_status=crm_status)
+
+    async def list_leads_by_state(
+        self, telegram_id: int, state: str, limit: int = 20
+    ) -> list[aiosqlite.Row]:
+        cur = await self._connection.execute(
+            """
+            SELECT o.* FROM lead_deliveries d
+            JOIN orders o ON o.id = d.order_id
+            WHERE d.telegram_id = ? AND d.state = ?
+            ORDER BY d.created_at DESC
+            LIMIT ?
+            """,
+            (telegram_id, state, limit),
+        )
+        return list(await cur.fetchall())
+
+    # Избранное — частный случай состояния доставки (LeadHunter 2.x API).
+
+    async def save_lead(self, telegram_id: int, order_id: int) -> None:
+        await self.set_delivery_state(telegram_id, order_id, LeadState.SAVED)
+
+    async def unsave_lead(self, telegram_id: int, order_id: int) -> None:
+        await self.set_delivery_state(telegram_id, order_id, LeadState.SENT)
+
+    async def is_lead_saved(self, telegram_id: int, order_id: int) -> bool:
+        row = await self.get_delivery(telegram_id, order_id)
+        return row is not None and row["state"] == LeadState.SAVED
 
     async def list_saved_leads(
         self, telegram_id: int, limit: int = 20
     ) -> list[aiosqlite.Row]:
         """Сохранённые лиды пользователя, свежие сверху."""
+        return await self.list_leads_by_state(telegram_id, LeadState.SAVED, limit)
+
+    async def list_active_user_ids(self) -> list[int]:
+        """Кому рассылать лиды: все пользователи с доступом.
+
+        Владелец (OWNER_ID) сюда не входит — его доступ не хранится в users,
+        получателем он добавляется отдельно (см. ``main.recipients``).
+        """
         cur = await self._connection.execute(
-            """
-            SELECT o.* FROM saved_leads s
-            JOIN orders o ON o.id = s.order_id
-            WHERE s.telegram_id = ?
-            ORDER BY s.created_at DESC
-            LIMIT ?
-            """,
-            (telegram_id, limit),
+            "SELECT telegram_id FROM users WHERE paid_status = 1 ORDER BY telegram_id"
         )
-        return list(await cur.fetchall())
+        return [row["telegram_id"] for row in await cur.fetchall()]
 
     async def recent_orders(self, limit: int = 100) -> list[aiosqlite.Row]:
         """Последние доставленные лиды — сырьё для «🔍 Проверить сейчас».

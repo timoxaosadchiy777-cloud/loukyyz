@@ -183,3 +183,50 @@ async def test_new_tables_appear_on_legacy_db(tmp_path) -> None:
         assert len(await database.list_saved_leads(USER)) == 1
     finally:
         await database.close()
+
+
+async def test_saved_leads_migrate_into_deliveries(tmp_path) -> None:
+    """Избранное из версии 2.x не должно потеряться при переезде в доставки."""
+    path = tmp_path / "v2.db"
+
+    database = Database(str(path))
+    await database.connect()
+    order_id = await database.save_order(_order("kept"))
+    await database.close()
+
+    # Воспроизводим состояние 2.x: избранное лежит в отдельной таблице.
+    async with aiosqlite.connect(str(path)) as conn:
+        await conn.execute("DROP TABLE lead_deliveries")
+        await conn.execute(
+            "CREATE TABLE saved_leads (telegram_id INTEGER NOT NULL,"
+            " order_id INTEGER NOT NULL, created_at TEXT NOT NULL,"
+            " PRIMARY KEY (telegram_id, order_id))"
+        )
+        await conn.execute(
+            "INSERT INTO saved_leads VALUES (?, ?, '2024-01-01T00:00:00+00:00')",
+            (USER, order_id),
+        )
+        await conn.commit()
+
+    database = Database(str(path))
+    await database.connect()  # запускает миграцию
+    try:
+        assert await database.is_lead_saved(USER, order_id) is True
+        assert [r["id"] for r in await database.list_saved_leads(USER)] == [order_id]
+    finally:
+        await database.close()
+
+
+async def test_migration_is_idempotent(tmp_path) -> None:
+    path = tmp_path / "twice.db"
+    database = Database(str(path))
+    await database.connect()
+    order_id = await database.save_order(_order("x"))
+    await database.save_lead(USER, order_id)
+    await database.close()
+
+    for _ in range(2):
+        database = Database(str(path))
+        await database.connect()
+        assert len(await database.list_saved_leads(USER)) == 1
+        await database.close()
