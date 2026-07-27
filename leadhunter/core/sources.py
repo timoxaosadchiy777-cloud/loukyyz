@@ -8,8 +8,9 @@
 UI бота, пользовательские фильтры и валидация ``settings.yaml`` подхватят её
 автоматически — списки нигде не дублируются.
 
-Площадка с ``available=False`` показывается в интерфейсе как «скоро»: включить
-её нельзя, пока нет парсера. Так Kwork занимает своё место в UI заранее.
+Площадка с ``available=False`` показывается в интерфейсе красным: включить её
+нельзя, потому что парсера нет. Так пользователь видит полный список бирж и
+понимает, чего ждать, а чего — нет.
 """
 
 from __future__ import annotations
@@ -28,6 +29,10 @@ class Source:
         factory: Путь к фабрике парсера — ``"модуль:функция"``. Импортируется
             лениво, поэтому тяжёлые зависимости источника не тянутся, пока он
             не понадобился. Пустая строка = источник без собственного парсера.
+        default_enabled: Включена ли биржа у нового пользователя.
+        note: Пояснение для владельца — почему биржа выключена или чем особенна.
+        needs: Переменная окружения, без которой парсер не поднимется. Экран
+            «Биржи» подсказывает её, если биржа включена, а опрос не идёт.
     """
 
     id: str
@@ -36,10 +41,11 @@ class Source:
     factory: str = ""
     default_enabled: bool = True
     note: str = ""
+    needs: str = ""
 
     @property
     def button_label(self) -> str:
-        return self.label if self.available else f"{self.label} (скоро)"
+        return self.label if self.available else f"{self.label} (нет парсера)"
 
 
 # Подключить новую биржу = добавить строку сюда и написать фабрику
@@ -48,13 +54,22 @@ class Source:
 # settings.yaml — подхватит её автоматически.
 SOURCES: tuple[Source, ...] = (
     # --- Биржи с собственным парсером ---
+    # Порядок здесь = порядок кнопок на экране «Биржи».
+    Source(
+        "upwork", "💼 Upwork",
+        factory="parsers.upwork_parser:build",
+        needs="UPWORK_RSS_URL",
+        note="лента сохранённого поиска: скопируйте её RSS-ссылку в UPWORK_RSS_URL",
+    ),
     Source(
         "kwork", "🇷🇺 Kwork.ru",
         factory="parsers.kwork_parser:build",
+        needs="KWORK_ENABLED",
     ),
     Source(
         "kwork_com", "🌍 Kwork.com",
         factory="parsers.kwork_parser:build",
+        needs="KWORK_ENABLED",
     ),
     Source(
         "freelancer", "🌐 Freelancer.com",
@@ -80,11 +95,7 @@ SOURCES: tuple[Source, ...] = (
     ),
 
     # --- Площадки без публичного доступа к заказам ---
-    # Не заглушки: парсера нет, потому что парсить нечего.
-    Source(
-        "upwork", "💼 Upwork", available=False,
-        note="закрыл RSS saved-search в 2023, публичного API на поиск заказов нет",
-    ),
+    # Не заглушка: парсера нет, потому что парсить нечего.
     Source(
         "fiverr", "🛒 Fiverr", available=False,
         note="витрина гигов; раздел Buyer Requests закрыт в 2023",

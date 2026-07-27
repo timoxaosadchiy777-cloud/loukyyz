@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     kwork_timeout: float = Field(20.0, alias="KWORK_TIMEOUT")
 
     # --- Прочие биржи ---
+    # Upwork: публичного API на поиск заказов нет, анонимный скрапинг закрыт
+    # Cloudflare. Рабочий путь — RSS сохранённого поиска: Find Work → сохранить
+    # поиск → скопировать ссылку RSS (в ней личный securityToken) сюда.
+    upwork_rss_url: str = Field("", alias="UPWORK_RSS_URL")
+
     # Freelancer.com — единственная с официальным публичным API (ключ не нужен).
     freelancer_enabled: bool = Field(True, alias="FREELANCER_ENABLED")
     freelancer_url: str = Field("https://www.freelancer.com", alias="FREELANCER_URL")
