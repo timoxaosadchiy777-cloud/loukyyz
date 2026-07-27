@@ -301,6 +301,14 @@ async def main() -> None:
     profile_file = settings.profile_file
     runtime_file = settings.runtime_config_file
     db_file = settings.database_file
+    # ID администратора печатаем явно: если он вписан с ошибкой, /admin просто
+    # молчит (так и задумано — бот не подсказывает наличие админки посторонним),
+    # и без этой строки владелец не поймёт, почему у него нет доступа.
+    log.info(
+        "Администратор: OWNER_ID=%s%s",
+        settings.owner_id or "не задан",
+        " · DEV_MODE включён — доступ открыт ВСЕМ" if settings.dev_mode else "",
+    )
     log.info("Профиль:   %s (%s)", profile_file, "найден" if profile_file.exists() else "НЕ найден")
     log.info("Настройки: %s", runtime_file)
     log.info("База:      %s", db_file)
