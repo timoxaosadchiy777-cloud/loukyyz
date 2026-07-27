@@ -21,7 +21,13 @@ async def db(tmp_path):
 async def test_users_table_created(db) -> None:
     cur = await db._connection.execute("PRAGMA table_info(users)")
     cols = {r["name"] for r in await cur.fetchall()}
-    assert cols == {"telegram_id", "username", "paid_status", "created_at"}
+    assert cols == {
+        "telegram_id",
+        "username",
+        "paid_status",
+        "created_at",
+        "access_requested_at",
+    }
 
 
 async def test_new_user_has_no_access(db) -> None:

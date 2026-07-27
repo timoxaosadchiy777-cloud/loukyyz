@@ -126,6 +126,12 @@ _MIGRATIONS: dict[str, str] = {
     "summary": "TEXT NOT NULL DEFAULT ''",
 }
 
+# Колонки users, добавленные после первого релиза мультиюзера.
+_USER_MIGRATIONS: dict[str, str] = {
+    # Момент нажатия «Запросить доступ»: пустая строка = заявки нет.
+    "access_requested_at": "TEXT NOT NULL DEFAULT ''",
+}
+
 
 class Database:
     """Тонкая обёртка над одним соединением aiosqlite."""
@@ -153,16 +159,20 @@ class Database:
         log.info("SQLite подключена: %s", self._path)
 
     async def _migrate(self) -> None:
-        """Идемпотентно добавляет недостающие колонки в существующую таблицу."""
-        cur = await self._connection.execute("PRAGMA table_info(orders)")
+        """Идемпотентно добавляет недостающие колонки в существующие таблицы."""
+        await self._add_columns("orders", _MIGRATIONS)
+        await self._add_columns("users", _USER_MIGRATIONS)
+        await self._migrate_saved_leads()
+
+    async def _add_columns(self, table: str, migrations: dict[str, str]) -> None:
+        cur = await self._connection.execute(f"PRAGMA table_info({table})")
         existing = {row["name"] for row in await cur.fetchall()}
-        for name, ddl in _MIGRATIONS.items():
+        for name, ddl in migrations.items():
             if name not in existing:
                 await self._connection.execute(
-                    f"ALTER TABLE orders ADD COLUMN {name} {ddl}"
+                    f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"
                 )
-                log.info("Миграция БД: добавлена колонка %s", name)
-        await self._migrate_saved_leads()
+                log.info("Миграция БД: %s.%s добавлена", table, name)
 
     async def _migrate_saved_leads(self) -> None:
         """Переносит избранное из saved_leads в lead_deliveries.
@@ -319,6 +329,88 @@ class Database:
             (limit,),
         )
         return list(await cur.fetchall())
+
+    async def request_access(self, telegram_id: int, username: str = "") -> bool:
+        """Фиксирует заявку на доступ.
+
+        Returns:
+            ``True`` — заявка новая; ``False`` — она уже висит (не спамим админа).
+        """
+        row = await self.get_user(telegram_id)
+        if row is not None and row["access_requested_at"]:
+            return False
+
+        await self._connection.execute(
+            """
+            INSERT INTO users (telegram_id, username, paid_status, created_at,
+                               access_requested_at)
+            VALUES (?, ?, 0, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                username = excluded.username,
+                access_requested_at = excluded.access_requested_at
+            """,
+            (telegram_id, username, _utcnow_iso(), _utcnow_iso()),
+        )
+        await self._connection.commit()
+        return True
+
+    async def clear_access_request(self, telegram_id: int) -> None:
+        """Снимает заявку — после выдачи доступа или отказа."""
+        await self._connection.execute(
+            "UPDATE users SET access_requested_at = '' WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        await self._connection.commit()
+
+    async def list_access_requests(self, limit: int = 50) -> list[aiosqlite.Row]:
+        """Незакрытые заявки от пользователей без доступа, старые сверху."""
+        cur = await self._connection.execute(
+            """
+            SELECT * FROM users
+            WHERE access_requested_at != '' AND paid_status = 0
+            ORDER BY access_requested_at ASC LIMIT ?
+            """,
+            (limit,),
+        )
+        return list(await cur.fetchall())
+
+    async def stats(self) -> dict[str, int]:
+        """Сводка для админ-панели."""
+
+        async def scalar(sql: str) -> int:
+            cur = await self._connection.execute(sql)
+            row = await cur.fetchone()
+            return int(row[0] or 0) if row else 0
+
+        return {
+            "users_total": await scalar("SELECT COUNT(*) FROM users"),
+            "users_paid": await scalar(
+                "SELECT COUNT(*) FROM users WHERE paid_status = 1"
+            ),
+            "requests": await scalar(
+                "SELECT COUNT(*) FROM users"
+                " WHERE access_requested_at != '' AND paid_status = 0"
+            ),
+            "orders_total": await scalar("SELECT COUNT(*) FROM orders"),
+            "orders_delivered": await scalar(
+                "SELECT COUNT(*) FROM orders WHERE status = 'new'"
+            ),
+            "deliveries": await scalar("SELECT COUNT(*) FROM lead_deliveries"),
+            "saved": await scalar(
+                "SELECT COUNT(*) FROM lead_deliveries WHERE state = 'saved'"
+            ),
+        }
+
+    async def user_stats(self, telegram_id: int) -> tuple[int, int]:
+        """``(получено лидов, сохранено)`` — для панели пользователя."""
+        cur = await self._connection.execute(
+            "SELECT COUNT(*) AS total,"
+            " COALESCE(SUM(state = 'saved'), 0) AS saved"
+            " FROM lead_deliveries WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        row = await cur.fetchone()
+        return (row["total"], row["saved"]) if row else (0, 0)
 
     async def count_users(self) -> tuple[int, int]:
         """Возвращает ``(всего, с доступом)``."""
