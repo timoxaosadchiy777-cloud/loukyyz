@@ -336,20 +336,36 @@ async def main() -> None:
     responder = Responder(llm, settings, profile)
 
     bot = create_bot(settings)
-    dp = create_dispatcher(db, settings, responder)
     alerter = Alerter(bot, settings.owner_id, settings.alert_cooldown)
-    # Подсказки команд в синей кнопке Telegram (владельцу — ещё и админские).
-    await setup_commands(bot, settings.owner_id)
 
     # Парсеры собираются по реестру источников: подключить биржу = строка в
     # core/sources.py. Импорт ленивый, поэтому отсутствие зависимости одного
     # источника не мешает остальным (см. parsers/registry.py).
-    from parsers.registry import build_parsers
+    #
+    # Состав опрашиваемых бирж задают САМИ пользователи в боте: супервизор
+    # держит парсер, пока биржу выбрал хотя бы один человек, и гасит его, когда
+    # не выбрал никто. Один парсер на биржу на всех — по-другому нельзя: полсотни
+    # клиентов означали бы полсотни одинаковых запросов к сайту и быстрый бан.
+    from parsers.supervisor import SourceSupervisor
 
     queue: "asyncio.Queue[Order]" = asyncio.Queue(maxsize=settings.queue_maxsize)
-    parsers = build_parsers(
-        queue, settings, alerter, enabled_sources=config.current().enabled_sources
-    )
+    supervisor = SourceSupervisor(queue, settings, db, alerter, config=config)
+    # Стартуем то, что уже выбрано, до первого фонового прохода — иначе первую
+    # минуту после запуска бот не опрашивал бы ничего.
+    await supervisor.reconcile()
+    log.info("Опрашиваются биржи: %s", ", ".join(sorted(supervisor.active)) or "ни одной")
+    if supervisor.blocked:
+        # Самая обидная тишина — когда биржа включена в боте, а её глушит
+        # забытый список в settings.yaml. Говорим об этом прямо при старте.
+        log.warning(
+            "Биржи %s включены пользователями, но запрещены enabled_sources в %s. "
+            "Уберите список (enabled_sources: []), если это не задумано",
+            ", ".join(sorted(supervisor.blocked)), runtime_file,
+        )
+
+    dp = create_dispatcher(db, settings, responder, supervisor)
+    # Подсказки команд в синей кнопке Telegram (владельцу — ещё и админские).
+    await setup_commands(bot, settings.owner_id)
 
     heartbeat = Heartbeat(settings.health_path, settings.health_interval)
 
@@ -361,10 +377,9 @@ async def main() -> None:
     tasks = [
         bot_task,
         asyncio.create_task(heartbeat.run(), name="heartbeat"),
-        *[
-            asyncio.create_task(parser.run_safe(), name=f"parser:{parser.name}")
-            for parser in parsers
-        ],
+        # Сверка состава парсеров с выбором пользователей: включённая в боте
+        # биржа стартует без перезапуска процесса.
+        asyncio.create_task(supervisor.run(), name="sources"),
         *[
             # Несколько потребителей очереди: пока один ждёт ответа модели,
             # остальные разбирают следующие лиды. Записи в SQLite всё равно
@@ -410,10 +425,7 @@ async def main() -> None:
             task.cancel()
         # Дожидаемся отмены, иначе задачи продолжат жить на закрытых ресурсах.
         await asyncio.gather(*tasks, return_exceptions=True)
-        for parser in parsers:
-            closer = getattr(parser, "aclose", None)
-            if closer is not None:
-                await _quiet(closer())
+        await _quiet(supervisor.aclose())
         await _quiet(responder.aclose())
         await _quiet(db.close())
         await _quiet(bot.session.close())

@@ -710,6 +710,20 @@ class Database:
             if source.available and chosen.get(source.id, source.default_enabled)
         )
 
+    async def sources_with_subscribers(self, owner_id: int = 0) -> set[str]:
+        """Биржи, которые включил хотя бы один активный пользователь.
+
+        Парсер процессный — один на биржу для всех. Поднимать его на каждого
+        пользователя нельзя: при полусотне клиентов это полсотни одинаковых
+        запросов к сайту и быстрый бан. Поэтому опрашиваем биржу, пока она
+        нужна хоть кому-то, и не трогаем совсем, если её не выбрал никто.
+        """
+        recipients = [uid for uid, _ in await self.list_recipients(owner_id)]
+        wanted: set[str] = set()
+        for telegram_id in recipients:
+            wanted.update(await self.get_enabled_sources(telegram_id))
+        return wanted
+
     async def set_source_enabled(
         self, telegram_id: int, source: str, enabled: bool
     ) -> None:

@@ -58,7 +58,7 @@ def build_parsers(
             log.info("Источник '%s' выключен в settings.yaml — пропускаем", source.id)
             continue
 
-        parser = _build_one(source, queue, settings, alerter)
+        parser = build_one(source, queue, settings, alerter)
         if parser is not None:
             parsers.append(parser)
 
@@ -69,7 +69,7 @@ def build_parsers(
     return parsers
 
 
-def _build_one(
+def build_one(
     source: Source,
     queue: "asyncio.Queue[Order]",
     settings: "Settings",

@@ -418,7 +418,10 @@ def create_bot(settings: Settings) -> Bot:
 
 
 def create_dispatcher(
-    db: Database, settings: Settings, responder: Responder | None = None
+    db: Database,
+    settings: Settings,
+    responder: Responder | None = None,
+    supervisor=None,
 ) -> Dispatcher:
     dp = Dispatcher()
     # Зависимости прокидываются в хендлеры по имени аргумента.
@@ -428,6 +431,10 @@ def create_dispatcher(
     # Нужен кнопке «🔄 Сгенерировать заново»; без него она честно скажет,
     # что генерация недоступна.
     dp["responder"] = responder
+    # Супервизор парсеров: экран «Биржи» показывает по нему реальное состояние
+    # опроса и запускает биржу сразу после включения. Без него экран работает,
+    # просто без этих подсказок.
+    dp["sources"] = supervisor
     # Админский роутер — первым: его команды видит только владелец.
     dp.include_router(admin_router)
     dp.include_router(menu_router)
